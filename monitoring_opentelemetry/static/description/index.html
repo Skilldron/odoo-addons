@@ -607,8 +607,9 @@ mode, in milliseconds.</td>
 for an unknown method),
 <tt class="docutils literal">http.route</tt>,
 <tt class="docutils literal">http.response.status_code</tt>,
-<tt class="docutils literal">url.path</tt> (not for a route
-with arguments), <tt class="docutils literal">url.scheme</tt>,
+<tt class="docutils literal">url.path</tt> (only for a route
+without arguments),
+<tt class="docutils literal">url.scheme</tt>,
 <tt class="docutils literal">server.address</tt>,
 <tt class="docutils literal">server.port</tt>,
 <tt class="docutils literal">network.protocol.version</tt>,
@@ -672,14 +673,14 @@ the database (<tt class="docutils literal">odoo.db</tt>).</p>
 <p><strong>Never in the spans</strong>: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters
 and the literal values of the queries. The logs never include the HTTP
-access logs nor the failed queries that Odoo logs with their parameters;
-the other log records are exported as Odoo writes them, message and
-exception included.</p>
+access logs nor the queries that Odoo logs with their parameters (failed
+queries, <tt class="docutils literal">debug_sql</tt>); the other log records are exported as Odoo
+writes them, message and exception included.</p>
 <p><strong>Personal data</strong>: the spans hold the IP address of the client
 (<tt class="docutils literal">client.address</tt>, the proxy’s one unless <tt class="docutils literal">proxy_mode</tt> is set), its
 user agent, the id of the user (<tt class="docutils literal">odoo.uid</tt>) and the URL path of the
-routes without arguments. They reach the collector and its storage: set
-its retention accordingly.</p>
+routes without arguments (never the path of an unknown URL). They reach
+the collector and its storage: set its retention accordingly.</p>
 </div>
 <div class="section" id="known-issues-roadmap">
 <h1><a class="toc-backref" href="#toc-entry-4">Known issues / Roadmap</a></h1>

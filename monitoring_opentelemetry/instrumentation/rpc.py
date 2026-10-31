@@ -53,7 +53,10 @@ def _call(span_factory, original, *args):
         try:
             return original(*args)
         except Exception as exc:
-            errors.record(span, exc)
+            try:
+                errors.record(span, exc)
+            except Exception:
+                _logger.debug("OpenTelemetry instrumentation failed", exc_info=True)
             raise
 
 

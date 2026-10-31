@@ -19,8 +19,6 @@ Odoo modules of Skilldron. One branch per Odoo version (`20.0`,
 
 [//]: # (addons)
 
-This part will be replaced when running the oca-gen-addons-table script from OCA/maintainer-tools.
-
 [//]: # (end addons)
 
 <!-- prettier-ignore-end -->

@@ -51,6 +51,7 @@ class _EnvironGetter(Getter):
 
 
 _GETTER = _EnvironGetter()
+USER_AGENT_MAX_LENGTH = 512
 
 
 @dataclass
@@ -60,7 +61,8 @@ class _Request:
     span: trace.Span
     method: str  # method in span names: HTTP for an unknown method (semconv)
     path: str
-    route_has_arguments: bool = False
+    # url.path only for a route without arguments: no record value nor unknown path
+    path_is_route: bool = False
 
 
 _current = contextvars.ContextVar("monitoring_opentelemetry_request", default=None)
@@ -110,7 +112,7 @@ def _start(app, environ, config):
     if not known:
         attributes["http.request.method_original"] = raw_method
     if user_agent := environ.get("HTTP_USER_AGENT"):
-        attributes["user_agent.original"] = user_agent
+        attributes["user_agent.original"] = user_agent[:USER_AGENT_MAX_LENGTH]
     protocol = environ.get("SERVER_PROTOCOL", "")
     if protocol.startswith("HTTP/"):
         attributes["network.protocol.version"] = protocol[5:]
@@ -126,7 +128,7 @@ def _start(app, environ, config):
 
 def _finish(request, environ, status_line):
     span = request.span
-    if not request.route_has_arguments:
+    if request.path_is_route:
         span.set_attribute("url.path", request.path)
     # read after Odoo applied ProxyFix (proxy_mode), which updates the environ
     span.set_attribute("url.scheme", environ.get("wsgi.url_scheme", "http"))
@@ -185,7 +187,7 @@ def _make_call(original):
 
 
 def _set_route(request, rule):
-    request.route_has_arguments = bool(rule.arguments)
+    request.path_is_route = not rule.arguments
     request.span.update_name(f"{request.method} {rule.rule}")
     request.span.set_attribute("http.route", rule.rule)
     request.span.set_attribute("odoo.route_type", rule.endpoint.routing["type"])

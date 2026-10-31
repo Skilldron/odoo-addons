@@ -84,9 +84,7 @@ class TestHttp(InstrumentationMixin, HttpCase):
         (span,) = self.server_spans()
         self.assertEqual(span.name, "GET")
         self.assertNotIn("http.route", span.attributes)
-        self.assertEqual(
-            span.attributes["url.path"], "/monitoring-opentelemetry/missing"
-        )
+        self.assertNotIn("url.path", span.attributes)
         self.assertEqual(span.attributes["http.response.status_code"], 404)
         self.assertEqual(span.status.status_code, StatusCode.UNSET)
 

@@ -195,8 +195,9 @@ Once Odoo restarts with an endpoint set, it logs
 | ``{METHOD}`` alone when no route matches   |                      | for an unknown method),           |
 |                                            |                      | ``http.route``,                   |
 |                                            |                      | ``http.response.status_code``,    |
-|                                            |                      | ``url.path`` (not for a route     |
-|                                            |                      | with arguments), ``url.scheme``,  |
+|                                            |                      | ``url.path`` (only for a route    |
+|                                            |                      | without arguments),               |
+|                                            |                      | ``url.scheme``,                   |
 |                                            |                      | ``server.address``,               |
 |                                            |                      | ``server.port``,                  |
 |                                            |                      | ``network.protocol.version``,     |
@@ -252,15 +253,15 @@ the database (``odoo.db``).
 **Never in the spans**: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters
 and the literal values of the queries. The logs never include the HTTP
-access logs nor the failed queries that Odoo logs with their parameters;
-the other log records are exported as Odoo writes them, message and
-exception included.
+access logs nor the queries that Odoo logs with their parameters (failed
+queries, ``debug_sql``); the other log records are exported as Odoo
+writes them, message and exception included.
 
 **Personal data**: the spans hold the IP address of the client
 (``client.address``, the proxy's one unless ``proxy_mode`` is set), its
 user agent, the id of the user (``odoo.uid``) and the URL path of the
-routes without arguments. They reach the collector and its storage: set
-its retention accordingly.
+routes without arguments (never the path of an unknown URL). They reach
+the collector and its storage: set its retention accordingly.
 
 Known issues / Roadmap
 ======================

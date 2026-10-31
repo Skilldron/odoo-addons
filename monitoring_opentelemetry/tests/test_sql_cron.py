@@ -8,6 +8,7 @@ from psycopg2 import sql as psql
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import SQL, mute_logger
 
+from odoo.addons.base.models import ir_cron as ir_cron_module
 from odoo.addons.base.models.ir_cron import CONSECUTIVE_TIMEOUT_FOR_FAILURE, IrCron
 
 from .. import sdk
@@ -220,7 +221,9 @@ class TestCron(OtelMixin, TransactionCase):
 
     @mute_logger("odoo.addons.base.models.ir_cron")
     def test_partially_done_job(self):
-        # failed after committing progress: an exception, not a failure
+        # failed after committing progress: an exception, not a failure; Odoo runs
+        # such a job again for MIN_TIME_PER_JOB seconds
+        self.patch(ir_cron_module, "MIN_TIME_PER_JOB", 0)
         _cron, (span,) = self.process_job(
             "env['ir.cron']._commit_progress(processed=1, remaining=1)\n1 / 0"
         )
