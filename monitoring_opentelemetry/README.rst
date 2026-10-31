@@ -22,10 +22,20 @@ Monitoring OpenTelemetry
 
 |badge1| |badge2| |badge3|
 
-Server-wide module that exports Odoo traces and logs with OpenTelemetry,
-over OTLP HTTP, to an OpenTelemetry collector.
+Server-wide module that exports the traces and the logs of Odoo with
+OpenTelemetry, over OTLP HTTP, to an OpenTelemetry collector (an Elastic
+EDOT collector, the OpenTelemetry Collector...).
 
-This version is a skeleton: the instrumentation is not implemented yet.
+- **Traces**: one span per HTTP request, ORM call over RPC, cron job and
+  slow SQL query, with the database, the user, the route, the model and
+  the method.
+- **Logs**: the log records of Odoo, with the trace and span ids of the
+  current request or cron job.
+
+It works with the multi-process server (``workers`` > 0, one SDK per
+worker) and the threaded server (``workers`` = 0). It never breaks Odoo:
+when the configuration is missing or the collector is down, Odoo runs as
+usual (the telemetry is lost).
 
 .. IMPORTANT::
    This is an alpha version, the data model and design can change at any time without warning.
@@ -37,17 +47,245 @@ This version is a skeleton: the instrumentation is not implemented yet.
 .. contents::
    :local:
 
+Installation
+============
+
+Install the Python package of the module, with its pinned OpenTelemetry
+dependencies:
+
+.. code:: shell
+
+   pip install "odoo-addon-monitoring_opentelemetry @ git+https://github.com/Skilldron/odoo-addons@20.0#subdirectory=monitoring_opentelemetry"
+
+The package depends on the ``odoo`` distribution, which the official
+Odoo image provides (``odoo 20.0.postYYYYMMDD``). When Odoo runs from a
+source checkout that pip does not know, install it with ``--no-deps``
+and install the packages listed in ``external_dependencies`` of the
+manifest.
+
+The module is loaded server-wide (see Configuration); installing it in a
+database is not needed.
+
 Configuration
 =============
 
-Load the module server-wide, in the Odoo configuration file:
+Load the module server-wide, in the Odoo configuration file (or with
+``--load base,web,monitoring_opentelemetry``):
 
 .. code:: ini
 
    server_wide_modules = base,web,monitoring_opentelemetry
 
-The configuration is read from environment variables only (``OTEL_*``);
-they are documented with the instrumentation.
+The configuration is read from environment variables only. Without an
+OTLP endpoint, the module stays inactive and logs it at startup.
+
+Standard OpenTelemetry variables, read by the SDK:
+
++-----------------------------------------+---------------------------+---------------------------------------------+
+| Variable                                | Default                   | Description                                 |
++=========================================+===========================+=============================================+
+| ``OTEL_EXPORTER_OTLP_ENDPOINT``         | none                      | Base URL of the collector, OTLP HTTP        |
+|                                         |                           | (``http://collector:4318``); enables both   |
+|                                         |                           | signals.                                    |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``, | none                      | Full URL for one signal                     |
+| ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``    |                           | (``.../v1/traces``); enables this signal    |
+|                                         |                           | alone.                                      |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_HEADERS``          | none                      | Headers of the export requests, values      |
+|                                         |                           | URL-encoded:                                |
+|                                         |                           | ``Authorization=Bearer%20<token>``          |
+|                                         |                           | (URL-encode a token with ``%``, ``,``,      |
+|                                         |                           | ``=`` or ``&``).                            |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_SERVICE_NAME``                   | ``odoo``                  | Service name.                               |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_RESOURCE_ATTRIBUTES``            | none                      | Extra resource attributes, which override   |
+|                                         |                           | those of the module:                        |
+|                                         |                           | ``deployment.environment.name=production``. |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_TRACES_SAMPLER``,                | ``parentbased_always_on`` | Sampling of the traces.                     |
+| ``OTEL_TRACES_SAMPLER_ARG``             |                           |                                             |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_BSP_*``, ``OTEL_BLRP_*``         | SDK defaults              | Batch processors of the spans and of the    |
+|                                         |                           | logs (queue size, delay).                   |
++-----------------------------------------+---------------------------+---------------------------------------------+
+| ``OTEL_SDK_DISABLED``                   | ``false``                 | ``true`` disables the module entirely.      |
++-----------------------------------------+---------------------------+---------------------------------------------+
+
+Variables of the module:
+
++--------------------------------+----------------+----------------------------+
+| Variable                       | Default        | Description                |
++================================+================+============================+
+| ``ODOO_OTEL_TRACES``           | ``true``       | Export the traces (when an |
+|                                |                | endpoint is set).          |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_LOGS``             | ``true``       | Export the logs (when an   |
+|                                |                | endpoint is set).          |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_LOG_LEVEL``        | ``INFO``       | Minimum level of the       |
+|                                |                | exported logs, name or     |
+|                                |                | number. It filters on top  |
+|                                |                | of the Odoo log levels     |
+|                                |                | (``--log-level``,          |
+|                                |                | ``--log-handler``): a      |
+|                                |                | record that Odoo does not  |
+|                                |                | log is never exported.     |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_EXCLUDED_LOGGERS`` | none           | More loggers not exported, |
+|                                |                | with their children.       |
+|                                |                | Always excluded:           |
+|                                |                | ``opentelemetry``,         |
+|                                |                | ``urllib3`` and            |
+|                                |                | ``requests`` (the          |
+|                                |                | exporter),                 |
+|                                |                | ``odoo.http.server`` and   |
+|                                |                | ``werkzeug`` (the HTTP     |
+|                                |                | access logs, which hold    |
+|                                |                | the query string and the   |
+|                                |                | session id; the traces     |
+|                                |                | replace them).             |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_EXCLUDED_PATHS``   | ``/websocket`` | URL path prefixes without  |
+|                                |                | span. Static files never   |
+|                                |                | have one.                  |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_SQL``              | ``slow``       | Spans of the SQL queries:  |
+|                                |                | ``off``, ``slow`` (queries |
+|                                |                | lasting at least           |
+|                                |                | ``ODOO_OTEL_SQL_SLOW_MS``) |
+|                                |                | or ``all``. The count and  |
+|                                |                | the total duration of the  |
+|                                |                | queries are on the request |
+|                                |                | and cron spans in every    |
+|                                |                | mode.                      |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_SQL_SLOW_MS``      | ``100``        | Threshold of the ``slow``  |
+|                                |                | mode, in milliseconds.     |
++--------------------------------+----------------+----------------------------+
+
+Example, in a Kubernetes deployment, with the token in a Secret:
+
+.. code:: yaml
+
+   env:
+     - name: OTEL_EXPORTER_OTLP_ENDPOINT
+       value: http://otel-gateway.observability.svc:4318
+     - name: OTLP_TOKEN
+       valueFrom:
+         secretKeyRef: {name: otlp, key: token}
+     - name: OTEL_EXPORTER_OTLP_HEADERS
+       value: Authorization=Bearer%20$(OTLP_TOKEN)
+     - name: OTEL_RESOURCE_ATTRIBUTES
+       value: deployment.environment.name=production
+
+Usage
+=====
+
+Once Odoo restarts with an endpoint set, it logs
+``OpenTelemetry is enabled`` (or ``is enabled in each worker`` with
+``workers`` > 0) and exports:
+
+**Spans**
+
++--------------------------------------------+----------------------+-----------------------------------+
+| Span                                       | Kind                 | Attributes                        |
++============================================+======================+===================================+
+| ``{METHOD} {route}``, e.g.                 | ``SERVER``           | ``http.request.method``           |
+| ``POST /web/dataset/call_kw/<path:path>``; |                      | (``http.request.method_original`` |
+| ``{METHOD}`` alone when no route matches   |                      | for an unknown method),           |
+|                                            |                      | ``http.route``,                   |
+|                                            |                      | ``http.response.status_code``,    |
+|                                            |                      | ``url.path`` (not for a route     |
+|                                            |                      | with arguments), ``url.scheme``,  |
+|                                            |                      | ``server.address``,               |
+|                                            |                      | ``server.port``,                  |
+|                                            |                      | ``network.protocol.version``,     |
+|                                            |                      | ``client.address``,               |
+|                                            |                      | ``user_agent.original``,          |
+|                                            |                      | ``odoo.db``, ``odoo.uid``,        |
+|                                            |                      | ``odoo.route_type``,              |
+|                                            |                      | ``odoo.sql.count``,               |
+|                                            |                      | ``odoo.sql.duration_ms``          |
++--------------------------------------------+----------------------+-----------------------------------+
+| ``{model}.{method}``, e.g.                 | ``INTERNAL``         | ``odoo.model``, ``odoo.method``   |
+| ``res.partner.web_search_read``            |                      | (``_OTHER`` for an unknown or     |
+|                                            |                      | private method)                   |
++--------------------------------------------+----------------------+-----------------------------------+
+| ``cron {name}``                            | ``INTERNAL``, root   | ``odoo.cron.id``,                 |
+|                                            | of its trace (child  | ``odoo.cron.name``,               |
+|                                            | of the request span  | ``odoo.cron.status``,             |
+|                                            | when run manually)   | ``odoo.cron.timed_out``,          |
+|                                            |                      | ``odoo.db``, ``odoo.sql.*``       |
++--------------------------------------------+----------------------+-----------------------------------+
+| ``{OPERATION} {table}``, e.g.              | ``CLIENT``           | ``db.system.name``,               |
+| ``SELECT res_partner``                     |                      | ``db.namespace``,                 |
+|                                            |                      | ``db.operation.name``,            |
+|                                            |                      | ``db.collection.name``,           |
+|                                            |                      | ``db.query.text``                 |
++--------------------------------------------+----------------------+-----------------------------------+
+
+An error sets the span status to ``ERROR`` with ``error.type`` and an
+``exception`` event: the first line of the message, truncated to 300
+characters and as raised (it may hold a value), and a stack trace
+without the local variables. A user error (``UserError``,
+``AccessError``, ``ValidationError``, a 4xx HTTP error...) is not a
+failure of Odoo: it only sets ``odoo.exception.type``.
+
+An incoming ``traceparent`` header continues the trace of the caller (a
+reverse proxy, another service).
+
+**Logs**: each record has its level, its logger (the instrumentation
+scope), its source (``code.file.path``, ``code.function.name``,
+``code.line.number``), the trace and span ids of the current span, and
+the database (``odoo.db``).
+
+**Resource**: ``service.name``, ``service.version`` and ``odoo.version``
+(the Odoo version), ``service.instance.id`` (the host name, the pod name
+in Kubernetes), ``odoo.process.type`` (``http``, ``cron`` or
+``threaded``), ``process.pid``.
+
+**Never in the spans**: the query string, the cookies, the headers other
+than the user agent, the request and response bodies, the SQL parameters
+and the literal values of the queries. The logs never include the HTTP
+access logs nor the failed queries that Odoo logs with their parameters;
+the other log records are exported as Odoo writes them, message and
+exception included.
+
+**Personal data**: the spans hold the IP address of the client
+(``client.address``, the proxy's one unless ``proxy_mode`` is set), its
+user agent, the id of the user (``odoo.uid``) and the URL path of the
+routes without arguments. They reach the collector and its storage: set
+its retention accordingly.
+
+Known issues / Roadmap
+======================
+
+Known limitations of this version:
+
+- The gevent process (websocket, longpolling) and the prefork master are
+  not instrumented, and their logs are not exported (startup, worker
+  recycling). Neither are metrics.
+- A worker killed by Odoo (``limit_time_real``, ``limit_memory_hard``)
+  or by the system loses the spans and logs not exported yet; the span
+  of the request or cron job it was running is lost too.
+- The span of a request ends when Odoo returns the response: the time
+  spent streaming a large body (a file download) is not measured.
+- A request retried by Odoo on a concurrency error gives one RPC span
+  per attempt under the same request span.
+- The log messages and exceptions are exported as Odoo writes them: a
+  message of Odoo or of a module that holds personal data or a value of
+  a record is exported too. Exclude its logger with
+  ``ODOO_OTEL_EXCLUDED_LOGGERS`` when needed.
+- When the collector is unreachable, stopping a process may wait for the
+  export timeout of the pending spans and logs
+  (``OTEL_EXPORTER_OTLP_TIMEOUT``, 10 s).
+- The ``traceparent`` header of a request is trusted: expose Odoo behind
+  a proxy that removes or sets it when the trace ids of the clients must
+  not be used.
+- ``--stop-after-init`` (module updates, tests) runs one process: the
+  SDK is set up as in the threaded server.
 
 Bug Tracker
 ===========

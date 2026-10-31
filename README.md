@@ -11,7 +11,7 @@ Odoo modules of Skilldron. One branch per Odoo version (`20.0`,
 
 | Module                     | Role                                                                  |
 | -------------------------- | --------------------------------------------------------------------- |
-| `monitoring_opentelemetry` | OpenTelemetry traces and logs over OTLP (planned), server-wide module |
+| `monitoring_opentelemetry` | OpenTelemetry traces and logs over OTLP, server-wide module           |
 
 <!-- /!\ do not modify below this line -->
 

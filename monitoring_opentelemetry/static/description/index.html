@@ -370,9 +370,20 @@ ul.auto-toc {
 !! source digest: sha256:90173001c32a8799e66d5c4ddefa6956cb345e679d197b8f8e0b99fafe22bbe2
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! -->
 <p><a class="reference external image-reference" href="https://odoo-community.org/page/development-status"><img alt="Alpha" src="https://img.shields.io/badge/maturity-Alpha-red.png" /></a> <a class="reference external image-reference" href="http://www.gnu.org/licenses/lgpl-3.0-standalone.html"><img alt="License: LGPL-3" src="https://img.shields.io/badge/license-LGPL--3-blue.png" /></a> <a class="reference external image-reference" href="https://github.com/Skilldron/odoo-addons/tree/20.0/monitoring_opentelemetry"><img alt="Skilldron/odoo-addons" src="https://img.shields.io/badge/github-Skilldron%2Fodoo--addons-lightgray.png?logo=github" /></a></p>
-<p>Server-wide module that exports Odoo traces and logs with OpenTelemetry,
-over OTLP HTTP, to an OpenTelemetry collector.</p>
-<p>This version is a skeleton: the instrumentation is not implemented yet.</p>
+<p>Server-wide module that exports the traces and the logs of Odoo with
+OpenTelemetry, over OTLP HTTP, to an OpenTelemetry collector (an Elastic
+EDOT collector, the OpenTelemetry Collector…).</p>
+<ul class="simple">
+<li><strong>Traces</strong>: one span per HTTP request, ORM call over RPC, cron job and
+slow SQL query, with the database, the user, the route, the model and
+the method.</li>
+<li><strong>Logs</strong>: the log records of Odoo, with the trace and span ids of the
+current request or cron job.</li>
+</ul>
+<p>It works with the multi-process server (<tt class="docutils literal">workers</tt> &gt; 0, one SDK per
+worker) and the threaded server (<tt class="docutils literal">workers</tt> = 0). It never breaks Odoo:
+when the configuration is missing or the collector is down, Odoo runs as
+usual (the telemetry is lost).</p>
 <div class="admonition important">
 <p class="first admonition-title">Important</p>
 <p class="last">This is an alpha version, the data model and design can change at any time without warning.
@@ -382,27 +393,321 @@ Only for development or testing purpose, do not use in production.
 <p><strong>Table of contents</strong></p>
 <div class="contents local topic" id="contents">
 <ul class="simple">
-<li><a class="reference internal" href="#configuration" id="toc-entry-1">Configuration</a></li>
-<li><a class="reference internal" href="#bug-tracker" id="toc-entry-2">Bug Tracker</a></li>
-<li><a class="reference internal" href="#credits" id="toc-entry-3">Credits</a><ul>
-<li><a class="reference internal" href="#authors" id="toc-entry-4">Authors</a></li>
-<li><a class="reference internal" href="#contributors" id="toc-entry-5">Contributors</a></li>
-<li><a class="reference internal" href="#maintainers" id="toc-entry-6">Maintainers</a></li>
+<li><a class="reference internal" href="#installation" id="toc-entry-1">Installation</a></li>
+<li><a class="reference internal" href="#configuration" id="toc-entry-2">Configuration</a></li>
+<li><a class="reference internal" href="#usage" id="toc-entry-3">Usage</a></li>
+<li><a class="reference internal" href="#known-issues-roadmap" id="toc-entry-4">Known issues / Roadmap</a></li>
+<li><a class="reference internal" href="#bug-tracker" id="toc-entry-5">Bug Tracker</a></li>
+<li><a class="reference internal" href="#credits" id="toc-entry-6">Credits</a><ul>
+<li><a class="reference internal" href="#authors" id="toc-entry-7">Authors</a></li>
+<li><a class="reference internal" href="#contributors" id="toc-entry-8">Contributors</a></li>
+<li><a class="reference internal" href="#maintainers" id="toc-entry-9">Maintainers</a></li>
 </ul>
 </li>
 </ul>
 </div>
+<div class="section" id="installation">
+<h1><a class="toc-backref" href="#toc-entry-1">Installation</a></h1>
+<p>Install the Python package of the module, with its pinned OpenTelemetry
+dependencies:</p>
+<pre class="code shell literal-block">
+pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;odoo-addon-monitoring_opentelemetry &#64; git+https://github.com/Skilldron/odoo-addons&#64;20.0#subdirectory=monitoring_opentelemetry&quot;</span>
+</pre>
+<p>The package depends on the <tt class="docutils literal">odoo</tt> distribution, which the official
+Odoo image provides (<tt class="docutils literal">odoo 20.0.postYYYYMMDD</tt>). When Odoo runs from a
+source checkout that pip does not know, install it with <tt class="docutils literal"><span class="pre">--no-deps</span></tt>
+and install the packages listed in <tt class="docutils literal">external_dependencies</tt> of the
+manifest.</p>
+<p>The module is loaded server-wide (see Configuration); installing it in a
+database is not needed.</p>
+</div>
 <div class="section" id="configuration">
-<h1><a class="toc-backref" href="#toc-entry-1">Configuration</a></h1>
-<p>Load the module server-wide, in the Odoo configuration file:</p>
+<h1><a class="toc-backref" href="#toc-entry-2">Configuration</a></h1>
+<p>Load the module server-wide, in the Odoo configuration file (or with
+<tt class="docutils literal"><span class="pre">--load</span> base,web,monitoring_opentelemetry</tt>):</p>
 <pre class="code ini literal-block">
 <span class="na">server_wide_modules</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">base,web,monitoring_opentelemetry</span>
 </pre>
-<p>The configuration is read from environment variables only (<tt class="docutils literal">OTEL_*</tt>);
-they are documented with the instrumentation.</p>
+<p>The configuration is read from environment variables only. Without an
+OTLP endpoint, the module stays inactive and logs it at startup.</p>
+<p>Standard OpenTelemetry variables, read by the SDK:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="36%" />
+<col width="24%" />
+<col width="40%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Variable</th>
+<th class="head">Default</th>
+<th class="head">Description</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_ENDPOINT</tt></td>
+<td>none</td>
+<td>Base URL of the collector, OTLP HTTP
+(<tt class="docutils literal"><span class="pre">http://collector:4318</span></tt>); enables both
+signals.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</tt>,
+<tt class="docutils literal">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</tt></td>
+<td>none</td>
+<td>Full URL for one signal
+(<tt class="docutils literal"><span class="pre">.../v1/traces</span></tt>); enables this signal
+alone.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_HEADERS</tt></td>
+<td>none</td>
+<td>Headers of the export requests, values
+URL-encoded:
+<tt class="docutils literal">Authorization=Bearer%20&lt;token&gt;</tt>
+(URL-encode a token with <tt class="docutils literal">%</tt>, <tt class="docutils literal">,</tt>,
+<tt class="docutils literal">=</tt> or <tt class="docutils literal">&amp;</tt>).</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_SERVICE_NAME</tt></td>
+<td><tt class="docutils literal">odoo</tt></td>
+<td>Service name.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_RESOURCE_ATTRIBUTES</tt></td>
+<td>none</td>
+<td>Extra resource attributes, which override
+those of the module:
+<tt class="docutils literal">deployment.environment.name=production</tt>.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_TRACES_SAMPLER</tt>,
+<tt class="docutils literal">OTEL_TRACES_SAMPLER_ARG</tt></td>
+<td><tt class="docutils literal">parentbased_always_on</tt></td>
+<td>Sampling of the traces.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_BSP_*</tt>, <tt class="docutils literal">OTEL_BLRP_*</tt></td>
+<td>SDK defaults</td>
+<td>Batch processors of the spans and of the
+logs (queue size, delay).</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_SDK_DISABLED</tt></td>
+<td><tt class="docutils literal">false</tt></td>
+<td><tt class="docutils literal">true</tt> disables the module entirely.</td>
+</tr>
+</tbody>
+</table>
+<p>Variables of the module:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="42%" />
+<col width="21%" />
+<col width="37%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Variable</th>
+<th class="head">Default</th>
+<th class="head">Description</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td><tt class="docutils literal">ODOO_OTEL_TRACES</tt></td>
+<td><tt class="docutils literal">true</tt></td>
+<td>Export the traces (when an
+endpoint is set).</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_LOGS</tt></td>
+<td><tt class="docutils literal">true</tt></td>
+<td>Export the logs (when an
+endpoint is set).</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_LOG_LEVEL</tt></td>
+<td><tt class="docutils literal">INFO</tt></td>
+<td>Minimum level of the
+exported logs, name or
+number. It filters on top
+of the Odoo log levels
+(<tt class="docutils literal"><span class="pre">--log-level</span></tt>,
+<tt class="docutils literal"><span class="pre">--log-handler</span></tt>): a
+record that Odoo does not
+log is never exported.</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_EXCLUDED_LOGGERS</tt></td>
+<td>none</td>
+<td>More loggers not exported,
+with their children.
+Always excluded:
+<tt class="docutils literal">opentelemetry</tt>,
+<tt class="docutils literal">urllib3</tt> and
+<tt class="docutils literal">requests</tt> (the
+exporter),
+<tt class="docutils literal">odoo.http.server</tt> and
+<tt class="docutils literal">werkzeug</tt> (the HTTP
+access logs, which hold
+the query string and the
+session id; the traces
+replace them).</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_EXCLUDED_PATHS</tt></td>
+<td><tt class="docutils literal">/websocket</tt></td>
+<td>URL path prefixes without
+span. Static files never
+have one.</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_SQL</tt></td>
+<td><tt class="docutils literal">slow</tt></td>
+<td>Spans of the SQL queries:
+<tt class="docutils literal">off</tt>, <tt class="docutils literal">slow</tt> (queries
+lasting at least
+<tt class="docutils literal">ODOO_OTEL_SQL_SLOW_MS</tt>)
+or <tt class="docutils literal">all</tt>. The count and
+the total duration of the
+queries are on the request
+and cron spans in every
+mode.</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_SQL_SLOW_MS</tt></td>
+<td><tt class="docutils literal">100</tt></td>
+<td>Threshold of the <tt class="docutils literal">slow</tt>
+mode, in milliseconds.</td>
+</tr>
+</tbody>
+</table>
+<p>Example, in a Kubernetes deployment, with the token in a Secret:</p>
+<pre class="code yaml literal-block">
+<span class="nt">env</span><span class="p">:</span><span class="w">
+  </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTEL_EXPORTER_OTLP_ENDPOINT</span><span class="w">
+    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">http://otel-gateway.observability.svc:4318</span><span class="w">
+  </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTLP_TOKEN</span><span class="w">
+    </span><span class="nt">valueFrom</span><span class="p">:</span><span class="w">
+      </span><span class="nt">secretKeyRef</span><span class="p">:</span><span class="w"> </span><span class="p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">otlp</span><span class="p-Indicator">,</span><span class="nt"> key</span><span class="p">:</span><span class="w"> </span><span class="nv">token</span><span class="p-Indicator">}</span><span class="w">
+  </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTEL_EXPORTER_OTLP_HEADERS</span><span class="w">
+    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">Authorization=Bearer%20$(OTLP_TOKEN)</span><span class="w">
+  </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTEL_RESOURCE_ATTRIBUTES</span><span class="w">
+    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">deployment.environment.name=production</span>
+</pre>
+</div>
+<div class="section" id="usage">
+<h1><a class="toc-backref" href="#toc-entry-3">Usage</a></h1>
+<p>Once Odoo restarts with an endpoint set, it logs
+<tt class="docutils literal">OpenTelemetry is enabled</tt> (or <tt class="docutils literal">is enabled in each worker</tt> with
+<tt class="docutils literal">workers</tt> &gt; 0) and exports:</p>
+<p><strong>Spans</strong></p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="44%" />
+<col width="22%" />
+<col width="35%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Span</th>
+<th class="head">Kind</th>
+<th class="head">Attributes</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td><tt class="docutils literal">{METHOD} {route}</tt>, e.g.
+<tt class="docutils literal">POST <span class="pre">/web/dataset/call_kw/&lt;path:path&gt;</span></tt>;
+<tt class="docutils literal">{METHOD}</tt> alone when no route matches</td>
+<td><tt class="docutils literal">SERVER</tt></td>
+<td><tt class="docutils literal">http.request.method</tt>
+(<tt class="docutils literal">http.request.method_original</tt>
+for an unknown method),
+<tt class="docutils literal">http.route</tt>,
+<tt class="docutils literal">http.response.status_code</tt>,
+<tt class="docutils literal">url.path</tt> (not for a route
+with arguments), <tt class="docutils literal">url.scheme</tt>,
+<tt class="docutils literal">server.address</tt>,
+<tt class="docutils literal">server.port</tt>,
+<tt class="docutils literal">network.protocol.version</tt>,
+<tt class="docutils literal">client.address</tt>,
+<tt class="docutils literal">user_agent.original</tt>,
+<tt class="docutils literal">odoo.db</tt>, <tt class="docutils literal">odoo.uid</tt>,
+<tt class="docutils literal">odoo.route_type</tt>,
+<tt class="docutils literal">odoo.sql.count</tt>,
+<tt class="docutils literal">odoo.sql.duration_ms</tt></td>
+</tr>
+<tr><td><tt class="docutils literal"><span class="pre">{model}.{method}</span></tt>, e.g.
+<tt class="docutils literal">res.partner.web_search_read</tt></td>
+<td><tt class="docutils literal">INTERNAL</tt></td>
+<td><tt class="docutils literal">odoo.model</tt>, <tt class="docutils literal">odoo.method</tt>
+(<tt class="docutils literal">_OTHER</tt> for an unknown or
+private method)</td>
+</tr>
+<tr><td><tt class="docutils literal">cron {name}</tt></td>
+<td><tt class="docutils literal">INTERNAL</tt>, root
+of its trace (child
+of the request span
+when run manually)</td>
+<td><tt class="docutils literal">odoo.cron.id</tt>,
+<tt class="docutils literal">odoo.cron.name</tt>,
+<tt class="docutils literal">odoo.cron.status</tt>,
+<tt class="docutils literal">odoo.cron.timed_out</tt>,
+<tt class="docutils literal">odoo.db</tt>, <tt class="docutils literal">odoo.sql.*</tt></td>
+</tr>
+<tr><td><tt class="docutils literal">{OPERATION} {table}</tt>, e.g.
+<tt class="docutils literal">SELECT res_partner</tt></td>
+<td><tt class="docutils literal">CLIENT</tt></td>
+<td><tt class="docutils literal">db.system.name</tt>,
+<tt class="docutils literal">db.namespace</tt>,
+<tt class="docutils literal">db.operation.name</tt>,
+<tt class="docutils literal">db.collection.name</tt>,
+<tt class="docutils literal">db.query.text</tt></td>
+</tr>
+</tbody>
+</table>
+<p>An error sets the span status to <tt class="docutils literal">ERROR</tt> with <tt class="docutils literal">error.type</tt> and an
+<tt class="docutils literal">exception</tt> event: the first line of the message, truncated to 300
+characters and as raised (it may hold a value), and a stack trace
+without the local variables. A user error (<tt class="docutils literal">UserError</tt>,
+<tt class="docutils literal">AccessError</tt>, <tt class="docutils literal">ValidationError</tt>, a 4xx HTTP error…) is not a
+failure of Odoo: it only sets <tt class="docutils literal">odoo.exception.type</tt>.</p>
+<p>An incoming <tt class="docutils literal">traceparent</tt> header continues the trace of the caller (a
+reverse proxy, another service).</p>
+<p><strong>Logs</strong>: each record has its level, its logger (the instrumentation
+scope), its source (<tt class="docutils literal">code.file.path</tt>, <tt class="docutils literal">code.function.name</tt>,
+<tt class="docutils literal">code.line.number</tt>), the trace and span ids of the current span, and
+the database (<tt class="docutils literal">odoo.db</tt>).</p>
+<p><strong>Resource</strong>: <tt class="docutils literal">service.name</tt>, <tt class="docutils literal">service.version</tt> and <tt class="docutils literal">odoo.version</tt>
+(the Odoo version), <tt class="docutils literal">service.instance.id</tt> (the host name, the pod name
+in Kubernetes), <tt class="docutils literal">odoo.process.type</tt> (<tt class="docutils literal">http</tt>, <tt class="docutils literal">cron</tt> or
+<tt class="docutils literal">threaded</tt>), <tt class="docutils literal">process.pid</tt>.</p>
+<p><strong>Never in the spans</strong>: the query string, the cookies, the headers other
+than the user agent, the request and response bodies, the SQL parameters
+and the literal values of the queries. The logs never include the HTTP
+access logs nor the failed queries that Odoo logs with their parameters;
+the other log records are exported as Odoo writes them, message and
+exception included.</p>
+<p><strong>Personal data</strong>: the spans hold the IP address of the client
+(<tt class="docutils literal">client.address</tt>, the proxy’s one unless <tt class="docutils literal">proxy_mode</tt> is set), its
+user agent, the id of the user (<tt class="docutils literal">odoo.uid</tt>) and the URL path of the
+routes without arguments. They reach the collector and its storage: set
+its retention accordingly.</p>
+</div>
+<div class="section" id="known-issues-roadmap">
+<h1><a class="toc-backref" href="#toc-entry-4">Known issues / Roadmap</a></h1>
+<p>Known limitations of this version:</p>
+<ul class="simple">
+<li>The gevent process (websocket, longpolling) and the prefork master are
+not instrumented, and their logs are not exported (startup, worker
+recycling). Neither are metrics.</li>
+<li>A worker killed by Odoo (<tt class="docutils literal">limit_time_real</tt>, <tt class="docutils literal">limit_memory_hard</tt>)
+or by the system loses the spans and logs not exported yet; the span
+of the request or cron job it was running is lost too.</li>
+<li>The span of a request ends when Odoo returns the response: the time
+spent streaming a large body (a file download) is not measured.</li>
+<li>A request retried by Odoo on a concurrency error gives one RPC span
+per attempt under the same request span.</li>
+<li>The log messages and exceptions are exported as Odoo writes them: a
+message of Odoo or of a module that holds personal data or a value of
+a record is exported too. Exclude its logger with
+<tt class="docutils literal">ODOO_OTEL_EXCLUDED_LOGGERS</tt> when needed.</li>
+<li>When the collector is unreachable, stopping a process may wait for the
+export timeout of the pending spans and logs
+(<tt class="docutils literal">OTEL_EXPORTER_OTLP_TIMEOUT</tt>, 10 s).</li>
+<li>The <tt class="docutils literal">traceparent</tt> header of a request is trusted: expose Odoo behind
+a proxy that removes or sets it when the trace ids of the clients must
+not be used.</li>
+<li><tt class="docutils literal"><span class="pre">--stop-after-init</span></tt> (module updates, tests) runs one process: the
+SDK is set up as in the threaded server.</li>
+</ul>
 </div>
 <div class="section" id="bug-tracker">
-<h1><a class="toc-backref" href="#toc-entry-2">Bug Tracker</a></h1>
+<h1><a class="toc-backref" href="#toc-entry-5">Bug Tracker</a></h1>
 <p>Bugs are tracked on <a class="reference external" href="https://github.com/Skilldron/odoo-addons/issues">GitHub Issues</a>.
 In case of trouble, please check there if your issue has already been reported.
 If you spotted it first, help us to smash it by providing a detailed and welcomed
@@ -410,21 +715,21 @@ If you spotted it first, help us to smash it by providing a detailed and welcome
 <p>Do not contact contributors directly about support or help with technical issues.</p>
 </div>
 <div class="section" id="credits">
-<h1><a class="toc-backref" href="#toc-entry-3">Credits</a></h1>
+<h1><a class="toc-backref" href="#toc-entry-6">Credits</a></h1>
 <div class="section" id="authors">
-<h2><a class="toc-backref" href="#toc-entry-4">Authors</a></h2>
+<h2><a class="toc-backref" href="#toc-entry-7">Authors</a></h2>
 <ul class="simple">
 <li>Skilldron</li>
 </ul>
 </div>
 <div class="section" id="contributors">
-<h2><a class="toc-backref" href="#toc-entry-5">Contributors</a></h2>
+<h2><a class="toc-backref" href="#toc-entry-8">Contributors</a></h2>
 <ul class="simple">
 <li>Harold</li>
 </ul>
 </div>
 <div class="section" id="maintainers">
-<h2><a class="toc-backref" href="#toc-entry-6">Maintainers</a></h2>
+<h2><a class="toc-backref" href="#toc-entry-9">Maintainers</a></h2>
 <p>This module is part of the <a class="reference external" href="https://github.com/Skilldron/odoo-addons/tree/20.0/monitoring_opentelemetry">Skilldron/odoo-addons</a> project on GitHub.</p>
 <p>You are welcome to contribute.</p>
 </div>
