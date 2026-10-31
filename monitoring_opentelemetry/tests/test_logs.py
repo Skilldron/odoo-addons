@@ -83,6 +83,19 @@ class TestLogs(OtelMixin, BaseCase):
         self.assertTrue(accepted("odoo.http.serverless"))
         self.assertTrue(accepted("odoo.http"))
 
+    def test_failed_query_dropped(self):
+        """Odoo logs a failed query with the values of its parameters."""
+        excluded = logs_instrumentation.ExcludedLoggers(())
+
+        def accepted(msg):
+            record = logging.LogRecord(
+                "odoo.sql_db", logging.ERROR, "", 1, msg, ("q", "e"), None
+            )
+            return excluded.filter(record)
+
+        self.assertFalse(accepted("bad query: %s\nERROR: %s"))
+        self.assertTrue(accepted("Connection to the database failed"))
+
     def test_records_of_the_export_are_dropped(self):
         """Records emitted while exporting (any logger) would loop."""
         token = context.attach(context.set_value(_SUPPRESS_INSTRUMENTATION_KEY, True))

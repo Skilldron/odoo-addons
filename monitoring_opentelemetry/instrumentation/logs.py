@@ -7,10 +7,11 @@ handler (``ODOO_OTEL_LOG_LEVEL``) filters on top of the levels of the loggers se
 Odoo (``--log-level``, ``--log-handler``).
 
 Not exported: the loggers excluded by the configuration (the exporter's own, which
-would loop, and the HTTP access log, which the traces replace), the records emitted
-while exporting, the attributes of a record that are not scalars, and the attributes
-of the HTTP access log that hold headers, cookies or the session id. The message and
-the exception of a record are exported as logged, like on the standard output.
+would loop, and the HTTP access logs, which the traces replace), the records emitted
+while exporting, the failed queries logged by Odoo with their parameters, the
+attributes of a record that are not scalars, and the attributes of the HTTP access
+log that hold headers, cookies, the session id or the client address. The message
+and the exception of a record are exported as logged, like on the standard output.
 
 A record is exported only while the provider of the handler is the one of the SDK of
 the current process: never after its shutdown, nor in a forked child.
@@ -29,18 +30,28 @@ from .. import sdk
 ODOO_RECORD_ATTRIBUTES = frozenset(
     ("dbname", "thread_native", "test", "faked_created", "colored_message")
 )
-# Extra of the HTTP access log (odoo.http.server_log), even if its logger is exported
+# Extra of the HTTP access log (odoo.http.server_log), should a record carry them
 SENSITIVE_ATTRIBUTES = frozenset(
-    ("ident", "http_auth", "http_headers", "http_request_line")
+    ("ident", "http_auth", "http_headers", "http_request_line", "remote_addr")
 )
 _SCALARS = (str, bool, int, float)
 
 _handler = None
 
 
+def _is_failed_query(record):
+    """The record of a failed query: Odoo logs it with the values of its parameters."""
+    return (
+        record.name == "odoo.sql_db"
+        and isinstance(record.msg, str)
+        and record.msg.startswith("bad query:")
+    )
+
+
 class ExcludedLoggers(logging.Filter):
-    """Reject the records of the given loggers and of their children, and the
-    records emitted while exporting (whatever their logger)."""
+    """Reject the records of the given loggers and of their children, the records
+    emitted while exporting (whatever their logger), and the records of the failed
+    queries (the exception reaches the span of the request or the cron job)."""
 
     def __init__(self, names):
         super().__init__()
@@ -51,7 +62,9 @@ class ExcludedLoggers(logging.Filter):
         if get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return False
         name = record.name
-        return not (name in self.names or name.startswith(self.prefixes))
+        if name in self.names or name.startswith(self.prefixes):
+            return False
+        return not _is_failed_query(record)
 
 
 def _is_exportable(value):

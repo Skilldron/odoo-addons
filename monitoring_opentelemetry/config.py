@@ -16,10 +16,17 @@ ENDPOINT = "OTEL_EXPORTER_OTLP_ENDPOINT"
 TRACES_ENDPOINT = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 LOGS_ENDPOINT = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 SQL_MODES = ("off", "slow", "all")
-# Never exported: the exporter logs through them, exporting them would loop
-MANDATORY_EXCLUDED_LOGGERS = ("opentelemetry", "urllib3", "requests")
-# HTTP access log (odoo.http.server in Odoo 20): the traces replace it
-DEFAULT_EXCLUDED_LOGGERS = ("odoo.http.server", "werkzeug")
+# Never exported: the exporter logs through the first ones, exporting them would loop;
+# the HTTP access logs (odoo.http.server in Odoo 20, werkzeug) hold the query string and
+# the session id in their message, and the traces replace them
+MANDATORY_EXCLUDED_LOGGERS = (
+    "opentelemetry",
+    "urllib3",
+    "requests",
+    "odoo.http.server",
+    "werkzeug",
+)
+DEFAULT_EXCLUDED_LOGGERS = ()
 DEFAULT_EXCLUDED_PATHS = ("/websocket",)
 
 

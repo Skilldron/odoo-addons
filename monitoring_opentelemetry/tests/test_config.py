@@ -56,9 +56,17 @@ class TestConfig(BaseCase):
         self.assertTrue(result.traces)
         self.assertFalse(result.logs)
         self.assertEqual(result.log_level, logging.WARNING)
-        # the loggers of the exporter are always excluded
+        # the loggers of the exporter and the access logs are always excluded
         self.assertEqual(
-            result.excluded_loggers, ("opentelemetry", "urllib3", "requests", "a")
+            result.excluded_loggers,
+            (
+                "opentelemetry",
+                "urllib3",
+                "requests",
+                "odoo.http.server",
+                "werkzeug",
+                "a",
+            ),
         )
         self.assertEqual(result.excluded_paths, ())
         self.assertEqual((result.sql, result.sql_slow_ms), ("all", 2.5))
