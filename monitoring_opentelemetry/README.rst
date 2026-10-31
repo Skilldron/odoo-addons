@@ -81,37 +81,35 @@ OTLP endpoint, the module stays inactive and logs it at startup.
 
 Standard OpenTelemetry variables, read by the SDK:
 
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| Variable                                | Default                   | Description                                 |
-+=========================================+===========================+=============================================+
-| ``OTEL_EXPORTER_OTLP_ENDPOINT``         | none                      | Base URL of the collector, OTLP HTTP        |
-|                                         |                           | (``http://collector:4318``); enables both   |
-|                                         |                           | signals.                                    |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``, | none                      | Full URL for one signal                     |
-| ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``    |                           | (``.../v1/traces``); enables this signal    |
-|                                         |                           | alone.                                      |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_EXPORTER_OTLP_HEADERS``          | none                      | Headers of the export requests, values      |
-|                                         |                           | URL-encoded:                                |
-|                                         |                           | ``Authorization=Bearer%20<token>``          |
-|                                         |                           | (URL-encode a token with ``%``, ``,``,      |
-|                                         |                           | ``=`` or ``&``).                            |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_SERVICE_NAME``                   | ``odoo``                  | Service name.                               |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_RESOURCE_ATTRIBUTES``            | none                      | Extra resource attributes, which override   |
-|                                         |                           | those of the module:                        |
-|                                         |                           | ``deployment.environment.name=production``. |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_TRACES_SAMPLER``,                | ``parentbased_always_on`` | Sampling of the traces.                     |
-| ``OTEL_TRACES_SAMPLER_ARG``             |                           |                                             |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_BSP_*``, ``OTEL_BLRP_*``         | SDK defaults              | Batch processors of the spans and of the    |
-|                                         |                           | logs (queue size, delay).                   |
-+-----------------------------------------+---------------------------+---------------------------------------------+
-| ``OTEL_SDK_DISABLED``                   | ``false``                 | ``true`` disables the module entirely.      |
-+-----------------------------------------+---------------------------+---------------------------------------------+
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| Variable                                | Default                   | Description                                                       |
++=========================================+===========================+===================================================================+
+| ``OTEL_EXPORTER_OTLP_ENDPOINT``         | none                      | Base URL of the collector, OTLP HTTP (``http://collector:4318``); |
+|                                         |                           | enables both signals.                                             |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``, | none                      | Full URL for one signal (``.../v1/traces``); enables this signal  |
+| ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``    |                           | alone.                                                            |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_HEADERS``          | none                      | Headers of the export requests, values URL-encoded:               |
+|                                         |                           | ``Authorization=Bearer%20<token>`` (URL-encode a token with       |
+|                                         |                           | ``%``, ``,``, ``=`` or ``&``).                                    |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_SERVICE_NAME``                   | ``odoo``                  | Service name.                                                     |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_RESOURCE_ATTRIBUTES``            | none                      | Extra resource attributes, which override those of the module:    |
+|                                         |                           | ``deployment.environment.name=production,service.version=1.4.2``. |
+|                                         |                           | Recommended: the environment, and the version of what is deployed |
+|                                         |                           | (the image tag) as ``service.version``, which is the Odoo version |
+|                                         |                           | otherwise.                                                        |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_TRACES_SAMPLER``,                | ``parentbased_always_on`` | Sampling of the traces.                                           |
+| ``OTEL_TRACES_SAMPLER_ARG``             |                           |                                                                   |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_BSP_*``, ``OTEL_BLRP_*``         | SDK defaults              | Batch processors of the spans and of the logs (queue size,        |
+|                                         |                           | delay).                                                           |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_SDK_DISABLED``                   | ``false``                 | ``true`` disables the module entirely.                            |
++-----------------------------------------+---------------------------+-------------------------------------------------------------------+
 
 Variables of the module:
 
@@ -178,7 +176,7 @@ Example, in a Kubernetes deployment, with the token in a Secret:
      - name: OTEL_EXPORTER_OTLP_HEADERS
        value: Authorization=Bearer%20$(OTLP_TOKEN)
      - name: OTEL_RESOURCE_ATTRIBUTES
-       value: deployment.environment.name=production
+       value: deployment.environment.name=production,service.version=1.4.2
 
 Usage
 =====
@@ -241,10 +239,12 @@ scope), its source (``code.file.path``, ``code.function.name``,
 ``code.line.number``), the trace and span ids of the current span, and
 the database (``odoo.db``).
 
-**Resource**: ``service.name``, ``service.version`` and ``odoo.version``
-(the Odoo version), ``service.instance.id`` (the host name, the pod name
-in Kubernetes), ``odoo.process.type`` (``http``, ``cron`` or
-``threaded``), ``process.pid``.
+**Resource**: ``service.name``, ``odoo.version`` (the Odoo version),
+``service.version`` (the Odoo version too, unless set by
+``OTEL_RESOURCE_ATTRIBUTES``: set it to the version of your deployment),
+``service.instance.id`` (the host name, the pod name in Kubernetes),
+``odoo.process.type`` (``http``, ``cron`` or ``threaded``),
+``process.pid``.
 
 **Never in the spans**: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters

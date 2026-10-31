@@ -16,7 +16,7 @@ Standard OpenTelemetry variables, read by the SDK:
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | none | Full URL for one signal (`.../v1/traces`); enables this signal alone. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | none | Headers of the export requests, values URL-encoded: `Authorization=Bearer%20<token>` (URL-encode a token with `%`, `,`, `=` or `&`). |
 | `OTEL_SERVICE_NAME` | `odoo` | Service name. |
-| `OTEL_RESOURCE_ATTRIBUTES` | none | Extra resource attributes, which override those of the module: `deployment.environment.name=production`. |
+| `OTEL_RESOURCE_ATTRIBUTES` | none | Extra resource attributes, which override those of the module: `deployment.environment.name=production,service.version=1.4.2`. Recommended: the environment, and the version of what is deployed (the image tag) as `service.version`, which is the Odoo version otherwise. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Sampling of the traces. |
 | `OTEL_BSP_*`, `OTEL_BLRP_*` | SDK defaults | Batch processors of the spans and of the logs (queue size, delay). |
 | `OTEL_SDK_DISABLED` | `false` | `true` disables the module entirely. |
@@ -45,5 +45,5 @@ env:
   - name: OTEL_EXPORTER_OTLP_HEADERS
     value: Authorization=Bearer%20$(OTLP_TOKEN)
   - name: OTEL_RESOURCE_ATTRIBUTES
-    value: deployment.environment.name=production
+    value: deployment.environment.name=production,service.version=1.4.2
 ```

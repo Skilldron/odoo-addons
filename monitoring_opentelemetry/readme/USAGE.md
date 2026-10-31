@@ -23,9 +23,10 @@ proxy, another service).
 source (`code.file.path`, `code.function.name`, `code.line.number`), the trace and
 span ids of the current span, and the database (`odoo.db`).
 
-**Resource**: `service.name`, `service.version` and `odoo.version` (the Odoo
-version), `service.instance.id` (the host name, the pod name in Kubernetes),
-`odoo.process.type` (`http`, `cron` or `threaded`), `process.pid`.
+**Resource**: `service.name`, `odoo.version` (the Odoo version), `service.version`
+(the Odoo version too, unless set by `OTEL_RESOURCE_ATTRIBUTES`: set it to the
+version of your deployment), `service.instance.id` (the host name, the pod name in
+Kubernetes), `odoo.process.type` (`http`, `cron` or `threaded`), `process.pid`.
 
 **Never in the spans**: the query string, the cookies, the headers other than the
 user agent, the request and response bodies, the SQL parameters and the literal

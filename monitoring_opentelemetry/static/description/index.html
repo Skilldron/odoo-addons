@@ -433,9 +433,9 @@ OTLP endpoint, the module stays inactive and logs it at startup.</p>
 <p>Standard OpenTelemetry variables, read by the SDK:</p>
 <table border="1" class="docutils">
 <colgroup>
-<col width="36%" />
-<col width="24%" />
-<col width="40%" />
+<col width="30%" />
+<col width="20%" />
+<col width="50%" />
 </colgroup>
 <thead valign="bottom">
 <tr><th class="head">Variable</th>
@@ -446,24 +446,20 @@ OTLP endpoint, the module stays inactive and logs it at startup.</p>
 <tbody valign="top">
 <tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_ENDPOINT</tt></td>
 <td>none</td>
-<td>Base URL of the collector, OTLP HTTP
-(<tt class="docutils literal"><span class="pre">http://collector:4318</span></tt>); enables both
-signals.</td>
+<td>Base URL of the collector, OTLP HTTP (<tt class="docutils literal"><span class="pre">http://collector:4318</span></tt>);
+enables both signals.</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</tt>,
 <tt class="docutils literal">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</tt></td>
 <td>none</td>
-<td>Full URL for one signal
-(<tt class="docutils literal"><span class="pre">.../v1/traces</span></tt>); enables this signal
+<td>Full URL for one signal (<tt class="docutils literal"><span class="pre">.../v1/traces</span></tt>); enables this signal
 alone.</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_HEADERS</tt></td>
 <td>none</td>
-<td>Headers of the export requests, values
-URL-encoded:
-<tt class="docutils literal">Authorization=Bearer%20&lt;token&gt;</tt>
-(URL-encode a token with <tt class="docutils literal">%</tt>, <tt class="docutils literal">,</tt>,
-<tt class="docutils literal">=</tt> or <tt class="docutils literal">&amp;</tt>).</td>
+<td>Headers of the export requests, values URL-encoded:
+<tt class="docutils literal">Authorization=Bearer%20&lt;token&gt;</tt> (URL-encode a token with
+<tt class="docutils literal">%</tt>, <tt class="docutils literal">,</tt>, <tt class="docutils literal">=</tt> or <tt class="docutils literal">&amp;</tt>).</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_SERVICE_NAME</tt></td>
 <td><tt class="docutils literal">odoo</tt></td>
@@ -471,9 +467,11 @@ URL-encoded:
 </tr>
 <tr><td><tt class="docutils literal">OTEL_RESOURCE_ATTRIBUTES</tt></td>
 <td>none</td>
-<td>Extra resource attributes, which override
-those of the module:
-<tt class="docutils literal">deployment.environment.name=production</tt>.</td>
+<td>Extra resource attributes, which override those of the module:
+<tt class="docutils literal">deployment.environment.name=production,service.version=1.4.2</tt>.
+Recommended: the environment, and the version of what is deployed
+(the image tag) as <tt class="docutils literal">service.version</tt>, which is the Odoo version
+otherwise.</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_TRACES_SAMPLER</tt>,
 <tt class="docutils literal">OTEL_TRACES_SAMPLER_ARG</tt></td>
@@ -482,8 +480,8 @@ those of the module:
 </tr>
 <tr><td><tt class="docutils literal">OTEL_BSP_*</tt>, <tt class="docutils literal">OTEL_BLRP_*</tt></td>
 <td>SDK defaults</td>
-<td>Batch processors of the spans and of the
-logs (queue size, delay).</td>
+<td>Batch processors of the spans and of the logs (queue size,
+delay).</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_SDK_DISABLED</tt></td>
 <td><tt class="docutils literal">false</tt></td>
@@ -578,7 +576,7 @@ mode, in milliseconds.</td>
   </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTEL_EXPORTER_OTLP_HEADERS</span><span class="w">
     </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">Authorization=Bearer%20$(OTLP_TOKEN)</span><span class="w">
   </span><span class="p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">OTEL_RESOURCE_ATTRIBUTES</span><span class="w">
-    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">deployment.environment.name=production</span>
+    </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l-Scalar-Plain">deployment.environment.name=production,service.version=1.4.2</span>
 </pre>
 </div>
 <div class="section" id="usage">
@@ -662,10 +660,12 @@ reverse proxy, another service).</p>
 scope), its source (<tt class="docutils literal">code.file.path</tt>, <tt class="docutils literal">code.function.name</tt>,
 <tt class="docutils literal">code.line.number</tt>), the trace and span ids of the current span, and
 the database (<tt class="docutils literal">odoo.db</tt>).</p>
-<p><strong>Resource</strong>: <tt class="docutils literal">service.name</tt>, <tt class="docutils literal">service.version</tt> and <tt class="docutils literal">odoo.version</tt>
-(the Odoo version), <tt class="docutils literal">service.instance.id</tt> (the host name, the pod name
-in Kubernetes), <tt class="docutils literal">odoo.process.type</tt> (<tt class="docutils literal">http</tt>, <tt class="docutils literal">cron</tt> or
-<tt class="docutils literal">threaded</tt>), <tt class="docutils literal">process.pid</tt>.</p>
+<p><strong>Resource</strong>: <tt class="docutils literal">service.name</tt>, <tt class="docutils literal">odoo.version</tt> (the Odoo version),
+<tt class="docutils literal">service.version</tt> (the Odoo version too, unless set by
+<tt class="docutils literal">OTEL_RESOURCE_ATTRIBUTES</tt>: set it to the version of your deployment),
+<tt class="docutils literal">service.instance.id</tt> (the host name, the pod name in Kubernetes),
+<tt class="docutils literal">odoo.process.type</tt> (<tt class="docutils literal">http</tt>, <tt class="docutils literal">cron</tt> or <tt class="docutils literal">threaded</tt>),
+<tt class="docutils literal">process.pid</tt>.</p>
 <p><strong>Never in the spans</strong>: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters
 and the literal values of the queries. The logs never include the HTTP
