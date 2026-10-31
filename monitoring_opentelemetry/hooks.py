@@ -20,6 +20,7 @@ from odoo.tools import config as odoo_config
 
 from . import config as otel_config
 from . import sdk
+from .instrumentation import cron as cron_instrumentation
 from .instrumentation import http as http_instrumentation
 from .instrumentation import logs as logs_instrumentation
 from .instrumentation import rpc as rpc_instrumentation
@@ -66,10 +67,12 @@ def install(config):
     if config.traces:
         http_instrumentation.install()
         rpc_instrumentation.install()
+        cron_instrumentation.install()
 
 
 def uninstall():
     """Remove the instrumentation installed by :func:`install`."""
+    cron_instrumentation.uninstall()
     rpc_instrumentation.uninstall()
     http_instrumentation.uninstall()
     server_instrumentation.uninstall()

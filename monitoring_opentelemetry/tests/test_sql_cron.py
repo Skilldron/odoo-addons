@@ -1,0 +1,221 @@
+import threading
+
+import psycopg2
+from opentelemetry.trace import SpanKind, StatusCode
+from psycopg2 import sql as psql
+
+from odoo.tests import TransactionCase, tagged
+from odoo.tools import SQL, mute_logger
+
+from odoo.addons.base.models.ir_cron import CONSECUTIVE_TIMEOUT_FOR_FAILURE
+
+from .. import sdk
+from ..config import Config
+from ..instrumentation import cron as cron_instrumentation
+from ..instrumentation import sql as sql_instrumentation
+from .common import OtelMixin
+
+QUERY = "SELECT id FROM res_partner WHERE name = 'secret' AND id = %s"
+
+
+@tagged("post_install", "-at_install")
+class TestSql(OtelMixin, TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.setup_otel()
+
+    def run_query(self, mode, slow_ms=100.0, query=QUERY, params=(424242,)):
+        config = Config(enabled=True, sql=mode, sql_slow_ms=slow_ms)
+        tracer = sdk.tracer()
+        with (
+            tracer.start_as_current_span("unit") as unit,
+            sql_instrumentation.track(unit, config) as tracker,
+        ):
+            self.env.cr.execute(query, params)
+        spans = self.finished_spans()
+        unit = next(span for span in spans if span.name == "unit")
+        queries = [span for span in spans if span.kind == SpanKind.CLIENT]
+        return unit, queries, tracker
+
+    def test_all(self):
+        unit, queries, _tracker = self.run_query("all")
+        (span,) = [span for span in queries if span.name == "SELECT res_partner"]
+        self.assertEqual(span.parent.span_id, unit.context.span_id)
+        attributes = span.attributes
+        self.assertEqual(attributes["db.system.name"], "postgresql")
+        self.assertEqual(attributes["db.operation.name"], "SELECT")
+        self.assertEqual(attributes["db.collection.name"], "res_partner")
+        self.assertEqual(attributes["db.namespace"], self.env.cr.dbname)
+        self.assertEqual(
+            attributes["db.query.text"],
+            "SELECT id FROM res_partner WHERE name = ? AND id = %s",
+        )
+        self.assertNotIn("424242", str(dict(attributes)))
+        self.assertGreater(span.end_time, span.start_time)
+        self.assertGreaterEqual(unit.attributes["odoo.sql.count"], 1)
+        self.assertGreater(unit.attributes["odoo.sql.duration_ms"], 0)
+
+    def test_slow(self):
+        _unit, queries, tracker = self.run_query("slow", slow_ms=60_000)
+        self.assertEqual(queries, [])
+        self.assertGreaterEqual(tracker.count, 1)
+        _unit, queries, _tracker = self.run_query("slow", slow_ms=0)
+        self.assertTrue([span for span in queries if span.name == "SELECT res_partner"])
+
+    def test_off(self):
+        unit, queries, _tracker = self.run_query("off")
+        self.assertEqual(queries, [])
+        self.assertGreaterEqual(unit.attributes["odoo.sql.count"], 1)
+
+    def test_sql_object(self):
+        _unit, queries, _tracker = self.run_query(
+            "all",
+            query=SQL("SELECT id FROM res_partner WHERE id = %s", 424242),
+            params=None,
+        )
+        (span,) = [span for span in queries if span.name == "SELECT res_partner"]
+        self.assertEqual(
+            span.attributes["db.query.text"], "SELECT id FROM res_partner WHERE id = %s"
+        )
+
+    def test_failed_query(self):
+        config = Config(enabled=True, sql="all")
+        with (
+            sdk.tracer().start_as_current_span("unit") as unit,
+            sql_instrumentation.track(unit, config) as tracker,
+            self.assertRaises(psycopg2.Error),
+            mute_logger("odoo.sql_db"),
+            self.env.cr.savepoint(),
+        ):
+            self.env.cr.execute("SELECT id FROM monitoring_no_such_table")
+        self.assertGreaterEqual(tracker.count, 1)
+        self.assertTrue(
+            [
+                span
+                for span in self.finished_spans()
+                if span.name == "SELECT monitoring_no_such_table"
+            ]
+        )
+
+    def test_hooks_restored(self):
+        thread = threading.current_thread()
+        hooks = vars(thread).setdefault("query_hooks", [])
+        before = list(hooks)
+        config = Config(enabled=True, sql="off")
+        calls = []
+
+        def other_hook(*args):  # another hook (the profiler), added meanwhile
+            calls.append(args)
+
+        with (
+            sdk.tracer().start_as_current_span("outer") as outer,
+            sql_instrumentation.track(outer, config) as outer_tracker,
+        ):
+            hooks.append(other_hook)
+            with sql_instrumentation.track(outer, config) as inner_tracker:
+                self.env.cr.execute("SELECT 1")
+            self.env.cr.execute("SELECT 1")
+        hooks.remove(other_hook)
+        self.assertEqual(hooks, before)
+        self.assertEqual(inner_tracker.count, 1)
+        self.assertEqual(outer_tracker.count, 2)
+        self.assertEqual(len(calls), 2)
+
+    def test_query_text(self):
+        query_text = sql_instrumentation.query_text
+        self.assertEqual(query_text("SELECT 'it''s', %s"), "SELECT ?, %s")
+        self.assertEqual(
+            query_text(
+                "SELECT x FROM res_partner_2 WHERE id IN (1, 2.5, 3e10) -- 'a\n"
+                "AND b = E'c\\'d' /* 'e */ AND f = $t$ g $t$ AND h = $$ i $$"
+            ),
+            "SELECT x FROM res_partner_2 WHERE id IN (?, ?, ?) \n"
+            "AND b = ?  AND f = ? AND h = ?",
+        )
+        # a literal cut by the truncation of a large query is masked too
+        cut = query_text("INSERT INTO t VALUES " + "(1, 'secret'), " * 2000)
+        self.assertNotIn("secret", cut)
+        self.assertNotIn("1", cut)
+        self.assertEqual(query_text(b"SELECT x"), "SELECT x")
+        self.assertIsNone(query_text(psql.SQL("SELECT 1")))
+        self.assertEqual(
+            len(query_text("SELECT " + "x" * 5000)),
+            sql_instrumentation.QUERY_TEXT_MAX_LENGTH,
+        )
+
+
+@tagged("post_install", "-at_install")
+class TestCron(OtelMixin, TransactionCase):
+    def setUp(self):
+        super().setUp()
+        self.setup_otel()
+        cron_instrumentation.install()
+        self.addCleanup(cron_instrumentation.uninstall)
+
+    def process_job(self, code, **job_values):
+        cron = self.env["ir.cron"].create(
+            {
+                "name": "Monitoring OpenTelemetry test cron",
+                "state": "code",
+                "code": code,
+                "model_id": self.env.ref("base.model_res_partner").id,
+                "user_id": self.env.uid,
+                "interval_number": 1,
+                "interval_type": "days",
+            }
+        )
+        job = {
+            **cron.read(load=None)[0],
+            "done": 0,
+            "remaining": 0,
+            "timed_out_counter": 0,
+            "progress_id": 0,
+            **job_values,
+        }
+        self.env.flush_all()
+        with self.enter_registry_test_mode(), self.registry.cursor() as cr:
+            self.registry["ir.cron"]._process_job(cr, job)
+        return cron, [
+            span for span in self.finished_spans() if span.name.startswith("cron ")
+        ]
+
+    def test_job(self):
+        cron, (span,) = self.process_job("model.search([], limit=1)")
+        self.assertNotIn("odoo.cron.timed_out", span.attributes)
+        self.assertEqual(span.name, "cron Monitoring OpenTelemetry test cron")
+        self.assertEqual(span.kind, SpanKind.INTERNAL)
+        self.assertIsNone(span.parent)
+        attributes = span.attributes
+        self.assertEqual(attributes["odoo.cron.id"], cron.id)
+        self.assertEqual(attributes["odoo.cron.status"], "fully done")
+        self.assertEqual(attributes["odoo.db"], self.env.cr.dbname)
+        self.assertGreater(attributes["odoo.sql.count"], 0)
+        self.assertEqual(span.status.status_code, StatusCode.UNSET)
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_failed_job(self):
+        _cron, (span,) = self.process_job("raise ValueError('boom')")
+        self.assertEqual(span.attributes["odoo.cron.status"], "failed")
+        self.assertEqual(span.status.status_code, StatusCode.ERROR)
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_timed_out_job(self):
+        _cron, (span,) = self.process_job(
+            "model.search([], limit=1)",
+            timed_out_counter=CONSECUTIVE_TIMEOUT_FOR_FAILURE,
+        )
+        self.assertEqual(span.attributes["odoo.cron.status"], "failed")
+        self.assertIs(span.attributes["odoo.cron.timed_out"], True)
+        self.assertEqual(span.status.status_code, StatusCode.ERROR)
+
+    def test_manual_run(self):
+        # method_direct_trigger runs the job in the request: a child span
+        with sdk.tracer().start_as_current_span("request") as request:
+            _cron, (span,) = self.process_job("model.search([], limit=1)")
+        self.assertEqual(span.parent.span_id, request.get_span_context().span_id)
+        self.assertEqual(span.context.trace_id, request.get_span_context().trace_id)
+
+    def test_inactive(self):
+        sdk.shutdown()
+        _cron, spans = self.process_job("model.search([], limit=1)")
+        self.assertEqual(spans, [])

@@ -25,6 +25,7 @@ from odoo.http import router
 
 from .. import sdk
 from . import errors
+from . import sql as sql_instrumentation
 from ._patch import patch, unpatch
 
 _logger = logging.getLogger(__name__)
@@ -169,7 +170,8 @@ def _make_call(original):
         context_token = context.attach(trace.set_span_in_context(request.span))
         request_token = _current.set(request)
         try:
-            return original(self, environ, _start_response)
+            with sql_instrumentation.track(request.span, config):
+                return original(self, environ, _start_response)
         except BaseException as exc:
             _safely(errors.record, request.span, exc)
             raise

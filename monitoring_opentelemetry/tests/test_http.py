@@ -62,6 +62,8 @@ class TestHttp(InstrumentationMixin, HttpCase):
         self.assertEqual(attributes["odoo.db"], self.env.cr.dbname)
         self.assertIn("url.scheme", attributes)
         self.assertIn("server.address", attributes)
+        self.assertGreater(attributes["odoo.sql.count"], 0)
+        self.assertIn("odoo.sql.duration_ms", attributes)
         self.assertEqual(span.status.status_code, StatusCode.UNSET)
         # never the query string
         self.assertFalse(
