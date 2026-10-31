@@ -14,7 +14,9 @@ An error sets the span status to `ERROR` with `error.type` and an `exception`
 event: the first line of the message, truncated to 300 characters and as raised (it
 may hold a value), and a stack trace without the local variables. A
 user error (`UserError`, `AccessError`, `ValidationError`, a 4xx HTTP error...) is
-not a failure of Odoo: it only sets `odoo.exception.type`.
+not a failure of Odoo: it only sets `odoo.exception.type`. In a cron job, the exception
+of a run, user error included, is an event of its span (Odoo only logs it); the span is
+in error only when Odoo counts the job as `failed`.
 
 An incoming `traceparent` header continues the trace of the caller (a reverse
 proxy, another service).

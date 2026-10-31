@@ -1,4 +1,5 @@
 import threading
+from unittest.mock import patch
 
 import psycopg2
 from opentelemetry.trace import SpanKind, StatusCode
@@ -7,12 +8,14 @@ from psycopg2 import sql as psql
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import SQL, mute_logger
 
-from odoo.addons.base.models.ir_cron import CONSECUTIVE_TIMEOUT_FOR_FAILURE
+from odoo.addons.base.models.ir_cron import CONSECUTIVE_TIMEOUT_FOR_FAILURE, IrCron
 
 from .. import sdk
 from ..config import Config
 from ..instrumentation import cron as cron_instrumentation
+from ..instrumentation import errors
 from ..instrumentation import sql as sql_instrumentation
+from ..instrumentation._patch import is_patched
 from .common import OtelMixin
 
 QUERY = "SELECT id FROM res_partner WHERE name = 'secret' AND id = %s"
@@ -194,9 +197,67 @@ class TestCron(OtelMixin, TransactionCase):
 
     @mute_logger("odoo.addons.base.models.ir_cron")
     def test_failed_job(self):
-        _cron, (span,) = self.process_job("raise ValueError('boom')")
+        _cron, (span,) = self.process_job("1 / 0")
         self.assertEqual(span.attributes["odoo.cron.status"], "failed")
         self.assertEqual(span.status.status_code, StatusCode.ERROR)
+        # the exception logged by Odoo without raising it is on the span
+        (event,) = [event for event in span.events if event.name == "exception"]
+        self.assertEqual(
+            event.attributes["exception.type"], "builtins.ZeroDivisionError"
+        )
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_user_error_job(self):
+        # seen by nobody in a job: a failure, with its exception
+        _cron, (span,) = self.process_job("raise UserError('boom')")
+        self.assertEqual(
+            span.attributes["odoo.exception.type"], "odoo.exceptions.UserError"
+        )
+        self.assertEqual(span.status.status_code, StatusCode.ERROR)
+        self.assertEqual(
+            len([event for event in span.events if event.name == "exception"]), 1
+        )
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_partially_done_job(self):
+        # failed after committing progress: an exception, not a failure
+        _cron, (span,) = self.process_job(
+            "env['ir.cron']._commit_progress(processed=1, remaining=1)\n1 / 0"
+        )
+        self.assertEqual(span.attributes["odoo.cron.status"], "partially done")
+        self.assertNotEqual(span.status.status_code, StatusCode.ERROR)
+        self.assertTrue([event for event in span.events if event.name == "exception"])
+
+    def test_callback_outside_job(self):
+        # no span of a job: the exception is raised, unchanged
+        cron, spans = self.process_job("model.search([], limit=1)")
+        cron.ir_actions_server_id.code = "1 / 0"
+        self.env.flush_all()
+        with (
+            self.enter_registry_test_mode(),
+            self.registry.cursor() as cr,
+            self.assertRaises(ZeroDivisionError),
+        ):
+            cron.with_env(cron.env(cr=cr))._callback(
+                cron.name, cron.ir_actions_server_id.id
+            )
+        self.assertEqual(len(self.finished_spans()), len(spans))
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_instrumentation_failure(self):
+        # a failure of the instrumentation never replaces the exception of the job
+        with patch.object(
+            errors, "add_event", side_effect=RuntimeError("instrumentation")
+        ):
+            _cron, (span,) = self.process_job("1 / 0")
+        self.assertEqual(span.attributes["odoo.cron.status"], "failed")
+
+    def test_uninstall(self):
+        self.assertTrue(is_patched(IrCron, "_callback"))
+        cron_instrumentation.uninstall()
+        self.assertFalse(is_patched(IrCron, "_callback"))
+        self.assertFalse(is_patched(IrCron, "_process_job"))
+        cron_instrumentation.install()
 
     @mute_logger("odoo.addons.base.models.ir_cron")
     def test_timed_out_job(self):

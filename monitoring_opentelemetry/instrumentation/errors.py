@@ -69,7 +69,13 @@ def record(span, exc):
         return
     span.set_attribute("error.type", name)
     span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
-    if _first_recording(exc):
+    add_event(span, exc)
+
+
+def add_event(span, exc):
+    """Add the ``exception`` event of ``exc`` to ``span``, unless already recorded."""
+    if span.is_recording() and _first_recording(exc):
+        name = qualified_name(exc)
         message = safe_message(exc)
         span.add_event(
             "exception",

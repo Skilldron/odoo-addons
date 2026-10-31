@@ -6,10 +6,12 @@ queries are tracked on the span. A job run manually (``method_direct_trigger``) 
 in its HTTP request: its span is a child of the request span, whose SQL totals
 include the job's queries.
 
-The completion status of the job is known in ``_update_failure_count``, also called
-when the job failed by timeout without running (``odoo.cron.timed_out``): ``failed``
-sets the span in error. Odoo logs the exception of a failed job and does not raise
-it: the exception is in the logs of the trace, not on the span.
+The exception raised by a run of the job is added to the span in ``_callback``, before
+``_run_job`` logs it without raising it, whatever its class: in a job, a user error is
+seen by nobody. It does not set the span in error: a run that failed after committing
+progress may end ``partially done`` or ``fully done``. The completion status of the job
+is known in ``_update_failure_count``, also called when the job failed by timeout
+without running (``odoo.cron.timed_out``): only ``failed`` sets the span in error.
 """
 
 import contextvars
@@ -80,6 +82,23 @@ def _make_process_job(original):
     return _process_job
 
 
+def _add_exception(span, exc):
+    span.set_attribute("odoo.exception.type", errors.qualified_name(exc))
+    errors.add_event(span, exc)
+
+
+def _make_callback(original):
+    def _callback(self, *args, **kwargs):
+        try:
+            return original(self, *args, **kwargs)
+        except Exception as exc:
+            if (span := _current.get()) is not None:
+                _safely(_add_exception, span, exc)
+            raise
+
+    return _callback
+
+
 def _set_status(span, job, status):
     span.set_attribute("odoo.cron.status", str(status))
     if status != CompletionStatus.FAILED:
@@ -103,9 +122,11 @@ def _make_update_failure_count(original):
 
 def install():
     patch(IrCron, "_process_job", _make_process_job)
+    patch(IrCron, "_callback", _make_callback)
     patch(IrCron, "_update_failure_count", _make_update_failure_count)
 
 
 def uninstall():
     unpatch(IrCron, "_update_failure_count")
+    unpatch(IrCron, "_callback")
     unpatch(IrCron, "_process_job")

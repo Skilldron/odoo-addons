@@ -653,7 +653,10 @@ when run manually)</td>
 characters and as raised (it may hold a value), and a stack trace
 without the local variables. A user error (<tt class="docutils literal">UserError</tt>,
 <tt class="docutils literal">AccessError</tt>, <tt class="docutils literal">ValidationError</tt>, a 4xx HTTP error…) is not a
-failure of Odoo: it only sets <tt class="docutils literal">odoo.exception.type</tt>.</p>
+failure of Odoo: it only sets <tt class="docutils literal">odoo.exception.type</tt>. In a cron job,
+the exception of a run, user error included, is an event of its span
+(Odoo only logs it); the span is in error only when Odoo counts the job
+as <tt class="docutils literal">failed</tt>.</p>
 <p>An incoming <tt class="docutils literal">traceparent</tt> header continues the trace of the caller (a
 reverse proxy, another service).</p>
 <p><strong>Logs</strong>: each record has its level, its logger (the instrumentation
