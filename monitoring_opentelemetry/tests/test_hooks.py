@@ -21,7 +21,7 @@ class TestHooks(BaseCase):
     def setUp(self):
         super().setUp()
         keep_sdk_state(self)
-        self.addCleanup(server_instrumentation.uninstall)
+        self.addCleanup(hooks.uninstall)
         patcher = patch.object(server, "server", None)
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -20,6 +20,8 @@ from odoo.tools import config as odoo_config
 
 from . import config as otel_config
 from . import sdk
+from .instrumentation import http as http_instrumentation
+from .instrumentation import rpc as rpc_instrumentation
 from .instrumentation import server as server_instrumentation
 
 _logger = logging.getLogger(__name__)
@@ -60,6 +62,16 @@ def install(config):
     server_instrumentation.install(
         lambda process_type: activate(config, process_type), deactivate
     )
+    if config.traces:
+        http_instrumentation.install()
+        rpc_instrumentation.install()
+
+
+def uninstall():
+    """Remove the instrumentation installed by :func:`install`."""
+    rpc_instrumentation.uninstall()
+    http_instrumentation.uninstall()
+    server_instrumentation.uninstall()
 
 
 def activate(config, process_type):
