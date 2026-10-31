@@ -9,20 +9,23 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 from .. import sdk
 from ..config import Config
+from ..instrumentation import logs as logs_instrumentation
 
 ENDPOINT = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.invalid:4318"}
 
 
 def keep_sdk_state(case):
-    """Restore the SDK state of the test process at the end of ``case``."""
-    saved = sdk._active
+    """Restore the SDK state of the test process (and its log handler, which drops
+    the records meanwhile) at the end of ``case``."""
+    saved = sdk._active, logs_instrumentation._handler
 
     def restore():
+        logs_instrumentation.detach()
         sdk.shutdown()
-        sdk._active = saved
+        sdk._active, logs_instrumentation._handler = saved
 
     case.addCleanup(restore)
-    sdk._active = None
+    sdk._active = logs_instrumentation._handler = None
 
 
 class OtelMixin:

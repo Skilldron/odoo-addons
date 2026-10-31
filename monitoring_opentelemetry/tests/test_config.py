@@ -37,7 +37,7 @@ class TestConfig(BaseCase):
         self.assertEqual(result.excluded_paths, ("/websocket",))
         self.assertEqual(
             result.excluded_loggers,
-            ("opentelemetry", "urllib3", "requests", "werkzeug"),
+            ("opentelemetry", "urllib3", "requests", "odoo.http.server", "werkzeug"),
         )
         self.assertEqual((result.sql, result.sql_slow_ms), ("slow", 100.0))
 

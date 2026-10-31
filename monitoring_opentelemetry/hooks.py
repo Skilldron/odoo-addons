@@ -21,6 +21,7 @@ from odoo.tools import config as odoo_config
 from . import config as otel_config
 from . import sdk
 from .instrumentation import http as http_instrumentation
+from .instrumentation import logs as logs_instrumentation
 from .instrumentation import rpc as rpc_instrumentation
 from .instrumentation import server as server_instrumentation
 
@@ -75,9 +76,10 @@ def uninstall():
 
 
 def activate(config, process_type):
-    """Set up the SDK in the current process; never raise."""
+    """Set up the SDK in the current process and export its logs; never raise."""
     try:
-        sdk.setup(config, process_type)
+        if sdk.setup(config, process_type) and (provider := sdk.logger_provider()):
+            logs_instrumentation.attach(config, provider)
     except Exception:
         _logger.exception("OpenTelemetry setup failed, running without it")
 
@@ -85,6 +87,7 @@ def activate(config, process_type):
 def deactivate():
     """Flush and shut down the SDK of the current process; never raise."""
     try:
+        logs_instrumentation.detach()
         sdk.shutdown()
     except Exception:
         _logger.exception("OpenTelemetry shutdown failed")

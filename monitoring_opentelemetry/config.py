@@ -18,7 +18,8 @@ LOGS_ENDPOINT = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
 SQL_MODES = ("off", "slow", "all")
 # Never exported: the exporter logs through them, exporting them would loop
 MANDATORY_EXCLUDED_LOGGERS = ("opentelemetry", "urllib3", "requests")
-DEFAULT_EXCLUDED_LOGGERS = ("werkzeug",)
+# HTTP access log (odoo.http.server in Odoo 20): the traces replace it
+DEFAULT_EXCLUDED_LOGGERS = ("odoo.http.server", "werkzeug")
 DEFAULT_EXCLUDED_PATHS = ("/websocket",)
 
 

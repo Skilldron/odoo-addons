@@ -10,6 +10,7 @@ from odoo.tools import config as odoo_config
 from .. import hooks, sdk
 from ..config import Config
 from ..instrumentation import _patch
+from ..instrumentation import logs as logs_instrumentation
 from ..instrumentation import server as server_instrumentation
 from .common import ENDPOINT, keep_sdk_state
 
@@ -68,6 +69,7 @@ class TestHooks(BaseCase):
         self.assertTrue(self.is_installed())
         setup.assert_called_once_with(Config(enabled=True), "threaded")
         self.assertTrue(sdk.is_active())
+        self.assertIsNotNone(logs_instrumentation._handler)
         # the providers register their own exit handlers too
         register.assert_any_call(hooks.deactivate)
 
