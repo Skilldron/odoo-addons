@@ -65,6 +65,10 @@ jobs:
         run: manifestoo -d . check-dev-status --default-dev-status=Beta
       - name: Initialize test db
         run: oca_init_test_database
+      # The tests of the HTTP instrumentation render pages of web (/web/login): web is
+      # not a dependency of the module, and oca_init_test_database skips auto_install
+      - name: Install web in the test db
+        run: odoo -d "$PGDATABASE" -i web --stop-after-init
       - name: Run tests
         run: oca_run_tests
       - name: Upload screenshots from JS tests
