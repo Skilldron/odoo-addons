@@ -8,5 +8,14 @@
     "license": "LGPL-3",
     "development_status": "Alpha",
     "depends": ["base"],
+    "external_dependencies": {
+        "python": [
+            "opentelemetry-api==1.45.2",
+            "opentelemetry-sdk==1.45.2",
+            "opentelemetry-exporter-otlp-proto-http==1.45.2",
+            "opentelemetry-instrumentation-logging==0.66b2",
+        ],
+    },
+    "post_load": "post_load",
     "installable": True,
 }
