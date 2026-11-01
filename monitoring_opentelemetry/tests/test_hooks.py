@@ -3,6 +3,8 @@ import time
 from unittest.mock import patch
 
 import odoo
+from odoo.http import router
+from odoo.service import model as service_model
 from odoo.service import server
 from odoo.service.server import Worker, WorkerCron, WorkerHTTP
 from odoo.tests import BaseCase, tagged
@@ -76,6 +78,12 @@ class TestHooks(BaseCase):
         self.assertIsNotNone(logs_instrumentation._handler)
         # the providers register their own exit handlers too
         register.assert_any_call(hooks.deactivate)
+
+    def test_metrics_without_traces(self):
+        # the HTTP instrumentation measures the requests, the other ones trace
+        self.post_load({**ENDPOINT, "ODOO_OTEL_TRACES": "false"})
+        self.assertTrue(_patch.is_patched(router.Application, "__call__"))
+        self.assertFalse(_patch.is_patched(service_model, "call_kw"))
 
     def test_stop_after_init(self):
         setup, _register, _output = self.post_load(

@@ -65,8 +65,9 @@ def install(config):
     server_instrumentation.install(
         lambda process_type: activate(config, process_type), deactivate
     )
-    if config.traces:
+    if config.traces or config.metrics:
         http_instrumentation.install()
+    if config.traces:
         rpc_instrumentation.install()
         cron_instrumentation.install()
 

@@ -70,3 +70,9 @@ class OtelMixin:
                 for metric in scope_metrics.metrics:
                     metrics[metric.name] = metric
         return metrics, resource
+
+    def metric_points(self, name):
+        """The data points of the metric ``name`` collected now."""
+        collected, _resource = self.collect_metrics()
+        metric = collected.get(name)
+        return list(metric.data.data_points) if metric else []

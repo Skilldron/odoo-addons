@@ -4,7 +4,8 @@ from unittest.mock import Mock, patch
 from opentelemetry.trace import SpanKind, StatusCode
 
 from odoo import api
-from odoo.exceptions import UserError
+from odoo.exceptions import ConcurrencyError, UserError
+from odoo.http import retrying as retrying_module
 from odoo.http import router
 from odoo.tests import BaseCase, HttpCase, JsonRpcException, TransactionCase, tagged
 from odoo.tools import mute_logger
@@ -31,11 +32,13 @@ class InstrumentationMixin(OtelMixin):
         self.addCleanup(http_instrumentation.uninstall)
         self.addCleanup(rpc_instrumentation.uninstall)
 
+    def patch_search_read(self, exception):
+        @api.model
+        def search_read(self, *args, **kwargs):
+            raise exception
 
-@tagged("post_install", "-at_install")
-class TestHttp(InstrumentationMixin, HttpCase):
-    def server_spans(self):
-        return [s for s in self.finished_spans() if s.kind == SpanKind.SERVER]
+        Partner = type(self.env["res.partner"])
+        return patch.object(Partner, "search_read", search_read)
 
     def call_kw(self, model, method, args=(), kwargs=None):
         return self.make_jsonrpc_request(
@@ -47,6 +50,12 @@ class TestHttp(InstrumentationMixin, HttpCase):
                 "kwargs": kwargs or {},
             },
         )
+
+
+@tagged("post_install", "-at_install")
+class TestHttp(InstrumentationMixin, HttpCase):
+    def server_spans(self):
+        return [s for s in self.finished_spans() if s.kind == SpanKind.SERVER]
 
     def test_route(self):
         response = self.url_open("/web/login?redirect=%2Fodoo%3Ftoken%3Dsecret")
@@ -146,14 +155,6 @@ class TestHttp(InstrumentationMixin, HttpCase):
         (span,) = [s for s in self.finished_spans() if s.kind == SpanKind.INTERNAL]
         self.assertEqual(span.name, "res.partner._OTHER")
 
-    def patch_search_read(self, exception):
-        @api.model
-        def search_read(self, *args, **kwargs):
-            raise exception
-
-        Partner = type(self.env["res.partner"])
-        return patch.object(Partner, "search_read", search_read)
-
     @mute_logger("odoo.http", "odoo.http.router")
     def test_user_error(self):
         """An error of the user is named, but neither an error nor an exception."""
@@ -200,6 +201,187 @@ class TestHttp(InstrumentationMixin, HttpCase):
 
     def test_call_kw_imported_by_name(self):
         self.assertTrue(_patch.is_patched(dataset, "call_kw"))
+
+
+@tagged("post_install", "-at_install")
+class TestHttpMetrics(InstrumentationMixin, HttpCase):
+    def duration(self):
+        return {
+            tuple(sorted(point.attributes.items())): point
+            for point in self.metric_points("http.server.request.duration")
+        }
+
+    def test_duration(self):
+        self.url_open("/web/login")
+        # collected once: the exemplars are reset by a collection
+        ((attributes, point),) = self.duration().items()
+        self.assertEqual(
+            dict(attributes),
+            {
+                "http.request.method": "GET",
+                "http.route": "/web/login",
+                "http.response.status_code": 200,
+                "network.protocol.version": "1.1",
+                "url.scheme": "http",
+            },
+        )
+        self.assertEqual(point.count, 1)
+        self.assertGreater(point.sum, 0)
+        self.assertEqual(
+            tuple(point.explicit_bounds), http_instrumentation.DURATION_BUCKETS
+        )
+        # the exemplar links the measure to the trace of the request
+        (span,) = [s for s in self.finished_spans() if s.kind == SpanKind.SERVER]
+        self.assertIn(
+            span.context.trace_id,
+            [exemplar.trace_id for exemplar in point.exemplars],
+        )
+
+    def test_not_found(self):
+        self.url_open("/monitoring-opentelemetry/missing")
+        (attributes,) = self.duration()
+        self.assertNotIn("http.route", dict(attributes))
+        self.assertEqual(dict(attributes)["http.response.status_code"], 404)
+
+    def test_excluded(self):
+        self.url_open("/web/static/img/favicon.ico")
+        self.assertEqual(self.duration(), {})
+
+    def test_metrics_without_traces(self):
+        self.setup_otel(Config(enabled=True, traces=False))
+        self.url_open("/web/login")
+        self.assertEqual(self.finished_spans(), ())
+        (attributes,) = self.duration()
+        self.assertEqual(dict(attributes)["http.route"], "/web/login")
+        (sql,) = self.metric_points("odoo.http.sql.count")
+        self.assertGreater(sql.sum, 0)
+
+    def test_traces_without_metrics(self):
+        self.setup_otel(Config(enabled=True, metrics=False))
+        self.url_open("/web/login")
+        self.assertTrue(self.finished_spans())
+
+    def test_sql_count(self):
+        self.url_open("/web/login")
+        (point,) = self.metric_points("odoo.http.sql.count")
+        self.assertEqual(
+            dict(point.attributes),
+            {"http.request.method": "GET", "http.route": "/web/login"},
+        )
+        (span,) = [s for s in self.finished_spans() if s.kind == SpanKind.SERVER]
+        self.assertEqual(
+            (point.count, point.sum), (1, span.attributes["odoo.sql.count"])
+        )
+
+    @mute_logger("odoo.http", "odoo.http.router")
+    def test_server_error(self):
+        # a JSON-RPC error is a 200 response: error.type comes from the exception
+        self.authenticate("admin", "admin")
+        with (
+            self.patch_search_read(ValueError("boom")),
+            self.assertRaises(JsonRpcException),
+        ):
+            self.call_kw("res.partner", "search_read")
+        errors_ = [
+            dict(attributes)
+            for attributes in self.duration()
+            if "error.type" in dict(attributes)
+        ]
+        self.assertEqual(len(errors_), 1)
+        self.assertEqual(errors_[0]["error.type"], "builtins.ValueError")
+        self.assertEqual(errors_[0]["http.response.status_code"], 200)
+
+    @mute_logger("odoo.http", "odoo.http.router")
+    def test_user_error_is_not_an_error(self):
+        self.authenticate("admin", "admin")
+        with (
+            self.patch_search_read(UserError("no")),
+            self.assertRaises(JsonRpcException),
+        ):
+            self.call_kw("res.partner", "search_read")
+        self.assertFalse(
+            [
+                attributes
+                for attributes in self.duration()
+                if "error.type" in dict(attributes)
+            ]
+        )
+
+
+@tagged("post_install", "-at_install")
+class TestRetries(OtelMixin, BaseCase):
+    def setUp(self):
+        super().setUp()
+        self.setup_otel()
+        http_instrumentation.install()
+        self.addCleanup(http_instrumentation.uninstall)
+        patcher = patch.object(retrying_module.random, "uniform", return_value=0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.fake_env = SimpleNamespace(cr=Mock(closed=False))
+
+    def retries(self):
+        return sum(point.value for point in self.metric_points("odoo.http.retries"))
+
+    @mute_logger("odoo.http")
+    def test_retries(self):
+        failures = [ConcurrencyError("conflict"), ConcurrencyError("conflict")]
+
+        def func():
+            if failures:
+                raise failures.pop()
+            return "done"
+
+        self.assertEqual(retrying_module.retrying(func, self.fake_env), "done")
+        self.assertEqual(self.retries(), 2)
+        # the router imports it by name
+        self.assertTrue(_patch.is_patched(router, "retrying"))
+
+    @mute_logger("odoo.http")
+    def test_flush_failure(self):
+        # the deferred writes of the attempt fail in the flush done by Odoo
+        self.fake_env.cr.flush.side_effect = [ConcurrencyError("conflict"), None]
+        self.assertEqual(retrying_module.retrying(lambda: 1, self.fake_env), 1)
+        self.assertEqual(self.retries(), 1)
+
+    def test_no_retry(self):
+        self.assertEqual(retrying_module.retrying(lambda: 1, self.fake_env), 1)
+        self.assertEqual(self.retries(), 0)
+
+    @mute_logger("odoo.http")
+    def test_exhausted(self):
+        def func():
+            raise ConcurrencyError("conflict")
+
+        with self.assertRaises(ConcurrencyError):
+            retrying_module.retrying(func, self.fake_env)
+        tries = retrying_module.MAX_TRIES_ON_CONCURRENCY_FAILURE
+        self.assertEqual(self.retries(), tries - 1)
+
+    def test_without_metrics(self):
+        self.setup_otel(Config(enabled=True, metrics=False))
+        func = Mock(return_value=1)
+        self.assertEqual(retrying_module.retrying(func, self.fake_env), 1)
+        func.assert_called_once_with()  # not wrapped
+
+    def test_route(self):
+        span = sdk.tracer().start_span("GET")
+        request = http_instrumentation._Request(span, "GET", "/p")
+        request.attributes["http.route"] = "/web/dataset/call_kw"
+        token = http_instrumentation._current.set(request)
+        failures = [ConcurrencyError("conflict")]
+
+        def func():
+            if failures:
+                raise failures.pop()
+
+        try:
+            with mute_logger("odoo.http"):
+                retrying_module.retrying(func, self.fake_env)
+        finally:
+            http_instrumentation._current.reset(token)
+        (point,) = self.metric_points("odoo.http.retries")
+        self.assertEqual(dict(point.attributes), {"http.route": "/web/dataset/call_kw"})
 
 
 @tagged("post_install", "-at_install")

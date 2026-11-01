@@ -6,6 +6,13 @@ The span wraps ``Application.__call__``, the WSGI entry point of Odoo. The route
 ``__call__``: they are recorded where they leave ``serve_db`` / ``serve_nodb``. The
 span ends when ``__call__`` returns: sending a streamed body is not measured.
 
+Metrics, with or without the traces: ``http.server.request.duration`` (semantic
+conventions, with an exemplar of the trace when it is sampled), ``odoo.http.sql.count``
+(the SQL queries of a request) and ``odoo.http.retries`` (the attempts of a request
+or an RPC call that Odoo runs again after a concurrency error, raised by the attempt
+or by its final flush).
+A JSON-RPC error is a 200 response: its ``error.type`` comes from the exception.
+
 Never recorded: the query string (portal tokens), headers other than the user agent,
 cookies, bodies, and the path of a route with arguments (``/survey/start/<token>``):
 its template is in ``http.route``.
@@ -15,12 +22,14 @@ The telemetry code never breaks a request: its failures are logged at debug leve
 
 import contextvars
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from opentelemetry import context, propagate, trace
 from opentelemetry.propagators.textmap import Getter
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from odoo.http import retrying as retrying_module
 from odoo.http import router
 
 from .. import sdk
@@ -52,6 +61,50 @@ class _EnvironGetter(Getter):
 
 _GETTER = _EnvironGetter()
 USER_AGENT_MAX_LENGTH = 512
+# advice of the semantic conventions for http.server.request.duration
+DURATION_BUCKETS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.075,
+    0.1,
+    0.25,
+    0.5,
+    0.75,
+    1.0,
+    2.5,
+    5.0,
+    7.5,
+    10.0,
+)
+SQL_COUNT_BUCKETS = (0, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+
+
+def _duration(meter):
+    return meter.create_histogram(
+        "http.server.request.duration",
+        unit="s",
+        description="Duration of HTTP server requests.",
+        explicit_bucket_boundaries_advisory=DURATION_BUCKETS,
+    )
+
+
+def _sql_count(meter):
+    return meter.create_histogram(
+        "odoo.http.sql.count",
+        unit="{query}",
+        description="The SQL queries of an HTTP request.",
+        explicit_bucket_boundaries_advisory=SQL_COUNT_BUCKETS,
+    )
+
+
+def _retries(meter):
+    return meter.create_counter(
+        "odoo.http.retries",
+        unit="{retry}",
+        description="The attempts run again after a concurrency error.",
+    )
 
 
 @dataclass
@@ -63,6 +116,11 @@ class _Request:
     path: str
     # url.path only for a route without arguments: no record value nor unknown path
     path_is_route: bool = False
+    # attributes of the metrics
+    attributes: dict = field(default_factory=dict)
+    start: float = field(default_factory=time.perf_counter)
+    error_type: str | None = None
+    sql_count: int = 0
 
 
 _current = contextvars.ContextVar("monitoring_opentelemetry_request", default=None)
@@ -123,7 +181,11 @@ def _start(app, environ, config):
         kind=SpanKind.SERVER,
         attributes=attributes,
     )
-    return _Request(span, span_method, path)
+    request = _Request(span, span_method, path)
+    for key in ("http.request.method", "network.protocol.version"):
+        if key in attributes:
+            request.attributes[key] = attributes[key]
+    return request
 
 
 def _finish(request, environ, status_line):
@@ -131,7 +193,9 @@ def _finish(request, environ, status_line):
     if request.path_is_route:
         span.set_attribute("url.path", request.path)
     # read after Odoo applied ProxyFix (proxy_mode), which updates the environ
-    span.set_attribute("url.scheme", environ.get("wsgi.url_scheme", "http"))
+    scheme = environ.get("wsgi.url_scheme", "http")
+    span.set_attribute("url.scheme", scheme)
+    request.attributes["url.scheme"] = scheme
     if host := environ.get("HTTP_HOST") or environ.get("SERVER_NAME"):
         address, port = _split_host(host)
         span.set_attribute("server.address", address)
@@ -143,16 +207,38 @@ def _finish(request, environ, status_line):
         return
     code = int(status_line.split(None, 1)[0])
     span.set_attribute("http.response.status_code", code)
+    request.attributes["http.response.status_code"] = code
     if code >= 500:
         if "error.type" not in (getattr(span, "attributes", None) or {}):
             span.set_attribute("error.type", str(code))
         span.set_status(Status(StatusCode.ERROR))
+        request.error_type = request.error_type or str(code)
+    if request.error_type:
+        request.attributes["error.type"] = request.error_type
+
+
+def _record_error(request, exc):
+    errors.record(request.span, exc)
+    if not errors.is_user_error(exc):
+        request.error_type = request.error_type or errors.qualified_name(exc)
+
+
+def _record_metrics(request):
+    if duration := sdk.instrument(_duration):
+        duration.record(time.perf_counter() - request.start, request.attributes)
+    if sql_count := sdk.instrument(_sql_count):
+        attributes = {
+            key: request.attributes[key]
+            for key in ("http.request.method", "http.route")
+            if key in request.attributes
+        }
+        sql_count.record(request.sql_count, attributes)
 
 
 def _make_call(original):
     def __call__(self, environ, start_response):
         config = sdk.config()
-        if config is None or not config.traces:
+        if config is None or not (config.traces or config.metrics):
             return original(self, environ, start_response)
         try:
             request = _start(self, environ, config)
@@ -172,15 +258,20 @@ def _make_call(original):
         context_token = context.attach(trace.set_span_in_context(request.span))
         request_token = _current.set(request)
         try:
-            with sql_instrumentation.track(request.span, config):
-                return original(self, environ, _start_response)
+            with sql_instrumentation.track(request.span, config) as tracker:
+                try:
+                    return original(self, environ, _start_response)
+                finally:
+                    request.sql_count = tracker.count
         except BaseException as exc:
-            _safely(errors.record, request.span, exc)
+            _safely(_record_error, request, exc)
             raise
         finally:
             _current.reset(request_token)
-            context.detach(context_token)
             _safely(_finish, request, environ, status[-1] if status else None)
+            # in the context of the span: the exemplars of its trace
+            _safely(_record_metrics, request)
+            context.detach(context_token)
             _safely(request.span.end)
 
     return __call__
@@ -190,6 +281,7 @@ def _set_route(request, rule):
     request.path_is_route = not rule.arguments
     request.span.update_name(f"{request.method} {rule.rule}")
     request.span.set_attribute("http.route", rule.rule)
+    request.attributes["http.route"] = rule.rule
     request.span.set_attribute("odoo.route_type", rule.endpoint.routing["type"])
 
 
@@ -217,7 +309,7 @@ def _make_serve(original):
             _safely(current.span.set_attribute, "odoo.exception.type", name)
             raise
         except Exception as exc:
-            _safely(errors.record, current.span, exc)
+            _safely(_record_error, current, exc)
             raise
         finally:
             if uid := getattr(request.session, "uid", None):
@@ -226,14 +318,47 @@ def _make_serve(original):
     return serve
 
 
+def _count_retry(counter):
+    attributes = {}
+    if (current := _current.get()) and "http.route" in current.attributes:
+        attributes["http.route"] = current.attributes["http.route"]
+    counter.add(1, attributes)
+
+
+def _make_retrying(original):
+    def retrying(func, env, *args, **kwargs):
+        counter = sdk.instrument(_retries)
+        if counter is None:
+            return original(func, env, *args, **kwargs)
+        calls = 0
+
+        def attempt():
+            # called again by Odoo after a concurrency error of the previous attempt
+            # or of its flush, which this function does not see
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                _safely(_count_retry, counter)
+            return func()
+
+        return original(attempt, env, *args, **kwargs)
+
+    return retrying
+
+
 def install():
     patch(router.Application, "__call__", _make_call)
     patch(router, "_set_request_dispatcher", _make_set_request_dispatcher)
     patch(router, "serve_db", _make_serve)
     patch(router, "serve_nodb", _make_serve)
+    # imported by name in the router, from the module in odoo.service.model
+    patch(retrying_module, "retrying", _make_retrying)
+    patch(router, "retrying", _make_retrying)
 
 
 def uninstall():
+    unpatch(router, "retrying")
+    unpatch(retrying_module, "retrying")
     unpatch(router.Application, "__call__")
     unpatch(router, "_set_request_dispatcher")
     unpatch(router, "serve_db")
