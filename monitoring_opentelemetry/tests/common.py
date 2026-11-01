@@ -15,6 +15,12 @@ from ..instrumentation import logs as logs_instrumentation
 ENDPOINT = {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector.invalid:4318"}
 
 
+def in_memory_reader(_exporter):
+    """Replaces ``PeriodicExportingMetricReader``: the metrics of the process are
+    exported at shutdown, never to the network in the tests."""
+    return InMemoryMetricReader()
+
+
 def keep_sdk_state(case):
     """Restore the SDK state of the test process (and its log handler, which drops
     the records meanwhile) at the end of ``case``."""

@@ -12,7 +12,7 @@ from ..config import Config
 from ..instrumentation import _patch
 from ..instrumentation import logs as logs_instrumentation
 from ..instrumentation import server as server_instrumentation
-from .common import ENDPOINT, keep_sdk_state
+from .common import ENDPOINT, in_memory_reader, keep_sdk_state
 
 HOOKS_LOGGER = "odoo.addons.monitoring_opentelemetry.hooks"
 
@@ -24,6 +24,9 @@ class TestHooks(BaseCase):
         keep_sdk_state(self)
         self.addCleanup(hooks.uninstall)
         patcher = patch.object(server, "server", None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(sdk, "PeriodicExportingMetricReader", in_memory_reader)
         patcher.start()
         self.addCleanup(patcher.stop)
 

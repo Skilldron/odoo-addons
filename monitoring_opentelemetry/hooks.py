@@ -23,6 +23,7 @@ from . import sdk
 from .instrumentation import cron as cron_instrumentation
 from .instrumentation import http as http_instrumentation
 from .instrumentation import logs as logs_instrumentation
+from .instrumentation import process as process_instrumentation
 from .instrumentation import rpc as rpc_instrumentation
 from .instrumentation import server as server_instrumentation
 
@@ -79,12 +80,21 @@ def uninstall():
 
 
 def activate(config, process_type):
-    """Set up the SDK in the current process and export its logs; never raise."""
+    """Set up the SDK in the current process, export its logs and its metrics; never
+    raise."""
     try:
-        if sdk.setup(config, process_type) and (provider := sdk.logger_provider()):
+        if not sdk.setup(config, process_type):
+            return
+        if provider := sdk.logger_provider():
             logs_instrumentation.attach(config, provider)
     except Exception:
         _logger.exception("OpenTelemetry setup failed, running without it")
+        return
+    if config.metrics:
+        try:
+            process_instrumentation.register(sdk.meter())
+        except Exception:
+            _logger.exception("OpenTelemetry process metrics failed")
 
 
 def deactivate():

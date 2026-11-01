@@ -175,7 +175,7 @@ class TestLogs(OtelMixin, BaseCase):
 @tagged("post_install", "-at_install")
 class TestHooksLogs(OtelMixin, BaseCase):
     def test_activate_deactivate(self):
-        config = Config(enabled=True, traces=False)
+        config = Config(enabled=True, traces=False, metrics=False)
         with patch.object(sdk, "OTLPLogExporter"):
             hooks.activate(config, "http")
         handler = logs_instrumentation._handler
