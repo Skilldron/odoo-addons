@@ -3,6 +3,7 @@ import time
 from unittest.mock import patch
 
 import odoo
+from odoo import sql_db
 from odoo.http import router
 from odoo.service import model as service_model
 from odoo.service import server
@@ -86,6 +87,11 @@ class TestHooks(BaseCase):
         self.assertTrue(_patch.is_patched(router.Application, "__call__"))
         self.assertTrue(_patch.is_patched(service_model, "call_kw"))
         self.assertTrue(_patch.is_patched(IrCron, "_process_job"))
+        self.assertTrue(_patch.is_patched(sql_db.ConnectionPool, "borrow"))
+
+    def test_traces_without_metrics(self):
+        self.post_load({**ENDPOINT, "ODOO_OTEL_METRICS": "false"})
+        self.assertFalse(_patch.is_patched(sql_db.ConnectionPool, "borrow"))
 
     def test_stop_after_init(self):
         setup, _register, _output = self.post_load(

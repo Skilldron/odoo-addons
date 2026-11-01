@@ -23,6 +23,7 @@ from . import sdk
 from .instrumentation import cron as cron_instrumentation
 from .instrumentation import http as http_instrumentation
 from .instrumentation import logs as logs_instrumentation
+from .instrumentation import pool as pool_instrumentation
 from .instrumentation import process as process_instrumentation
 from .instrumentation import rpc as rpc_instrumentation
 from .instrumentation import server as server_instrumentation
@@ -69,10 +70,13 @@ def install(config):
         http_instrumentation.install()
         rpc_instrumentation.install()
         cron_instrumentation.install()
+    if config.metrics:
+        pool_instrumentation.install()
 
 
 def uninstall():
     """Remove the instrumentation installed by :func:`install`."""
+    pool_instrumentation.uninstall()
     cron_instrumentation.uninstall()
     rpc_instrumentation.uninstall()
     http_instrumentation.uninstall()
@@ -90,11 +94,13 @@ def activate(config, process_type):
     except Exception:
         _logger.exception("OpenTelemetry setup failed, running without it")
         return
-    if config.metrics:
+    if not config.metrics:
+        return
+    for instrumentation in (process_instrumentation, pool_instrumentation):
         try:
-            process_instrumentation.register(sdk.meter())
+            instrumentation.register(sdk.meter())
         except Exception:
-            _logger.exception("OpenTelemetry process metrics failed")
+            _logger.exception("OpenTelemetry metrics of %s failed", instrumentation)
 
 
 def deactivate():

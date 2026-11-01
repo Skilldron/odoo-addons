@@ -9,6 +9,7 @@ from odoo.tools import config as odoo_config
 
 from .. import hooks, sdk
 from ..config import Config
+from ..instrumentation import pool as pool_instrumentation
 from ..instrumentation import process as process_instrumentation
 from .common import OtelMixin, in_memory_reader
 
@@ -124,8 +125,10 @@ class TestHooksProcess(OtelMixin, BaseCase):
         return register
 
     def test_activate(self):
-        register = self.activate(Config(enabled=True, traces=False, logs=False))
+        with patch.object(pool_instrumentation, "register") as pool_register:
+            register = self.activate(Config(enabled=True, traces=False, logs=False))
         register.assert_called_once_with(sdk.meter())
+        pool_register.assert_called_once_with(sdk.meter())
 
     def test_activate_without_metrics(self):
         register = self.activate(Config(enabled=True, traces=False, metrics=False))
