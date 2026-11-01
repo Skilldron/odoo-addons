@@ -10,6 +10,8 @@ from odoo.service.server import Worker, WorkerCron, WorkerHTTP
 from odoo.tests import BaseCase, tagged
 from odoo.tools import config as odoo_config
 
+from odoo.addons.base.models.ir_cron import IrCron
+
 from .. import hooks, sdk
 from ..config import Config
 from ..instrumentation import _patch
@@ -83,6 +85,7 @@ class TestHooks(BaseCase):
         self.post_load({**ENDPOINT, "ODOO_OTEL_TRACES": "false"})
         self.assertTrue(_patch.is_patched(router.Application, "__call__"))
         self.assertTrue(_patch.is_patched(service_model, "call_kw"))
+        self.assertTrue(_patch.is_patched(IrCron, "_process_job"))
 
     def test_stop_after_init(self):
         setup, _register, _output = self.post_load(

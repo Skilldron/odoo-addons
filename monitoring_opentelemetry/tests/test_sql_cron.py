@@ -1,10 +1,12 @@
 import threading
+from datetime import timedelta
 from unittest.mock import patch
 
 import psycopg2
 from opentelemetry.trace import SpanKind, StatusCode
 from psycopg2 import sql as psql
 
+from odoo import fields
 from odoo.tests import TransactionCase, tagged
 from odoo.tools import SQL, mute_logger
 
@@ -283,3 +285,80 @@ class TestCron(OtelMixin, TransactionCase):
         sdk.shutdown()
         _cron, spans = self.process_job("model.search([], limit=1)")
         self.assertEqual(spans, [])
+
+    def cron_points(self, name):
+        return {
+            tuple(sorted(point.attributes.items())): point
+            for point in self.metric_points(name)
+        }
+
+    def test_duration(self):
+        self.process_job("model.search([], limit=1)")
+        ((attributes, point),) = self.cron_points("odoo.cron.duration").items()
+        self.assertEqual(
+            dict(attributes),
+            {
+                "odoo.cron.name": "Monitoring OpenTelemetry test cron",
+                "odoo.cron.status": "fully done",
+            },
+        )
+        self.assertEqual(point.count, 1)
+        self.assertEqual(
+            tuple(point.explicit_bounds), cron_instrumentation.DURATION_BUCKETS
+        )
+
+    @mute_logger("odoo.addons.base.models.ir_cron")
+    def test_failed_duration(self):
+        self.process_job("1 / 0")
+        ((attributes, _point),) = self.cron_points("odoo.cron.duration").items()
+        self.assertEqual(dict(attributes)["odoo.cron.status"], "failed")
+
+    def test_lag(self):
+        nextcall = fields.Datetime.now() - timedelta(seconds=90)
+        self.process_job("model.search([], limit=1)", nextcall=nextcall)
+        ((attributes, point),) = self.cron_points("odoo.cron.lag").items()
+        self.assertEqual(
+            dict(attributes), {"odoo.cron.name": "Monitoring OpenTelemetry test cron"}
+        )
+        self.assertGreaterEqual(point.sum, 90)
+        self.assertLess(point.sum, 600)
+
+    def test_no_lag_before_nextcall(self):
+        # run by a trigger before its nextcall: no known due time
+        nextcall = fields.Datetime.now() + timedelta(hours=1)
+        self.process_job("model.search([], limit=1)", nextcall=nextcall)
+        self.assertEqual(self.cron_points("odoo.cron.lag"), {})
+        self.assertEqual(len(self.cron_points("odoo.cron.duration")), 1)
+
+    def test_no_lag_when_run_manually(self):
+        # with or without the traces: the HTTP span may be a no-op one
+        self.setup_otel(Config(enabled=True, traces=False))
+        nextcall = fields.Datetime.now() - timedelta(days=2)
+        token = cron_instrumentation._manual.set(True)
+        try:
+            self.process_job("model.search([], limit=1)", nextcall=nextcall)
+        finally:
+            cron_instrumentation._manual.reset(token)
+        self.assertEqual(self.cron_points("odoo.cron.lag"), {})
+        self.assertEqual(len(self.cron_points("odoo.cron.duration")), 1)
+
+    def test_method_direct_trigger_is_manual(self):
+        seen = []
+        trigger = cron_instrumentation._make_method_direct_trigger(
+            lambda cron: seen.append(cron_instrumentation._manual.get())
+        )
+        trigger(self.env["ir.cron"])
+        self.assertEqual(seen, [True])
+        self.assertFalse(cron_instrumentation._manual.get())
+
+    def test_no_lag_after_partially_done(self):
+        # rescheduled at once by a trigger: the nextcall is the original one
+        nextcall = fields.Datetime.now() - timedelta(minutes=30)
+        self.process_job("model.search([], limit=1)", nextcall=nextcall, remaining=5)
+        self.assertEqual(self.cron_points("odoo.cron.lag"), {})
+
+    def test_metrics_without_traces(self):
+        self.setup_otel(Config(enabled=True, traces=False))
+        _cron, spans = self.process_job("model.search([], limit=1)")
+        self.assertEqual(spans, [])
+        self.assertEqual(len(self.cron_points("odoo.cron.duration")), 1)
