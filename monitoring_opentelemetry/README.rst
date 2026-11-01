@@ -22,14 +22,17 @@ Monitoring OpenTelemetry
 
 |badge1| |badge2| |badge3|
 
-Server-wide module that exports the traces and the logs of Odoo with
-OpenTelemetry, over OTLP HTTP, to any OpenTelemetry backend or collector
-(the OpenTelemetry Collector, Grafana Alloy, the Datadog Agent, Elastic
-EDOT...).
+Server-wide module that exports the traces, the metrics and the logs of
+Odoo with OpenTelemetry, over OTLP HTTP, to any OpenTelemetry backend or
+collector (the OpenTelemetry Collector, Grafana Alloy, the Datadog
+Agent, Elastic EDOT...).
 
 - **Traces**: one span per HTTP request, ORM call over RPC, cron job and
   slow SQL query, with the database, the user, the route, the model and
   the method.
+- **Metrics**: HTTP requests, ORM calls, SQL queries, cron jobs,
+  connection pools, memory and CPU of each worker, worker recycles and
+  concurrency retries.
 - **Logs**: the log records of Odoo, with the trace and span ids of the
   current request or cron job.
 
@@ -82,35 +85,43 @@ OTLP endpoint, the module stays inactive and logs it at startup.
 
 Standard OpenTelemetry variables, read by the SDK:
 
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| Variable                                | Default                   | Description                                                       |
-+=========================================+===========================+===================================================================+
-| ``OTEL_EXPORTER_OTLP_ENDPOINT``         | none                      | Base URL of the collector, OTLP HTTP (``http://collector:4318``); |
-|                                         |                           | enables both signals.                                             |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``, | none                      | Full URL for one signal (``.../v1/traces``); enables this signal  |
-| ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``    |                           | alone.                                                            |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_EXPORTER_OTLP_HEADERS``          | none                      | Headers of the export requests, values URL-encoded:               |
-|                                         |                           | ``Authorization=Bearer%20<token>`` (URL-encode a token with       |
-|                                         |                           | ``%``, ``,``, ``=`` or ``&``).                                    |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_SERVICE_NAME``                   | ``odoo``                  | Service name.                                                     |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_RESOURCE_ATTRIBUTES``            | none                      | Extra resource attributes, which override those of the module:    |
-|                                         |                           | ``deployment.environment.name=production,service.version=1.4.2``. |
-|                                         |                           | Recommended: the environment, and the version of what is deployed |
-|                                         |                           | (the image tag) as ``service.version``, which is the Odoo version |
-|                                         |                           | otherwise.                                                        |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_TRACES_SAMPLER``,                | ``parentbased_always_on`` | Sampling of the traces.                                           |
-| ``OTEL_TRACES_SAMPLER_ARG``             |                           |                                                                   |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_BSP_*``, ``OTEL_BLRP_*``         | SDK defaults              | Batch processors of the spans and of the logs (queue size,        |
-|                                         |                           | delay).                                                           |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
-| ``OTEL_SDK_DISABLED``                   | ``false``                 | ``true`` disables the module entirely.                            |
-+-----------------------------------------+---------------------------+-------------------------------------------------------------------+
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| Variable                                              | Default                   | Description                                                       |
++=======================================================+===========================+===================================================================+
+| ``OTEL_EXPORTER_OTLP_ENDPOINT``                       | none                      | Base URL of the collector, OTLP HTTP (``http://collector:4318``); |
+|                                                       |                           | enables the three signals.                                        |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_TRACES_ENDPOINT``,               | none                      | Full URL for one signal (``.../v1/traces``); enables this signal  |
+| ``OTEL_EXPORTER_OTLP_METRICS_ENDPOINT``,              |                           | alone.                                                            |
+| ``OTEL_EXPORTER_OTLP_LOGS_ENDPOINT``                  |                           |                                                                   |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_HEADERS``                        | none                      | Headers of the export requests, values URL-encoded:               |
+|                                                       |                           | ``Authorization=Bearer%20<token>`` (URL-encode a token with       |
+|                                                       |                           | ``%``, ``,``, ``=`` or ``&``).                                    |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_SERVICE_NAME``                                 | ``odoo``                  | Service name.                                                     |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_RESOURCE_ATTRIBUTES``                          | none                      | Extra resource attributes, which override those of the module:    |
+|                                                       |                           | ``deployment.environment.name=production,service.version=1.4.2``. |
+|                                                       |                           | Recommended: the environment, and the version of what is deployed |
+|                                                       |                           | (the image tag) as ``service.version``, which is the Odoo version |
+|                                                       |                           | otherwise.                                                        |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_TRACES_SAMPLER``, ``OTEL_TRACES_SAMPLER_ARG``  | ``parentbased_always_on`` | Sampling of the traces.                                           |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_BSP_*``, ``OTEL_BLRP_*``                       | SDK defaults              | Batch processors of the spans and of the logs (queue size,        |
+|                                                       |                           | delay).                                                           |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_METRIC_EXPORT_INTERVAL``                       | ``60000``                 | Interval between two exports of the metrics, in milliseconds.     |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`` | ``cumulative``            | ``delta`` for a backend that does not accept cumulative counters  |
+|                                                       |                           | or histograms; they can also be converted in the collector        |
+|                                                       |                           | (``cumulativetodelta`` processor).                                |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_METRICS_EXEMPLAR_FILTER``                      | ``trace_based``           | Exemplars: the measures of a sampled trace link to it.            |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
+| ``OTEL_SDK_DISABLED``                                 | ``false``                 | ``true`` disables the module entirely.                            |
++-------------------------------------------------------+---------------------------+-------------------------------------------------------------------+
 
 Variables of the module:
 
@@ -119,6 +130,9 @@ Variables of the module:
 +================================+================+============================+
 | ``ODOO_OTEL_TRACES``           | ``true``       | Export the traces (when an |
 |                                |                | endpoint is set).          |
++--------------------------------+----------------+----------------------------+
+| ``ODOO_OTEL_METRICS``          | ``true``       | Export the metrics (when   |
+|                                |                | an endpoint is set).       |
 +--------------------------------+----------------+----------------------------+
 | ``ODOO_OTEL_LOGS``             | ``true``       | Export the logs (when an   |
 |                                |                | endpoint is set).          |
@@ -239,6 +253,79 @@ as ``failed``.
 An incoming ``traceparent`` header continues the trace of the caller (a
 reverse proxy, another service).
 
+**Metrics**, exported by each process every
+``OTEL_METRIC_EXPORT_INTERVAL``, with or without the traces:
+
++-----------------------------------------+----------------------+-------------------------------------+
+| Metric                                  | Type                 | Attributes                          |
++=========================================+======================+=====================================+
+| ``http.server.request.duration`` (s)    | histogram            | ``http.request.method``,            |
+|                                         |                      | ``http.route``,                     |
+|                                         |                      | ``http.response.status_code``,      |
+|                                         |                      | ``url.scheme``,                     |
+|                                         |                      | ``network.protocol.version``,       |
+|                                         |                      | ``error.type``                      |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.http.sql.count``                 | histogram            | ``http.request.method``,            |
+|                                         |                      | ``http.route``: the SQL queries of  |
+|                                         |                      | a request                           |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.http.retries``                   | counter              | ``http.route``: the attempts of a   |
+|                                         |                      | request or an RPC call that Odoo    |
+|                                         |                      | runs again after a concurrency      |
+|                                         |                      | error                               |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.rpc.duration`` (s)               | histogram            | ``odoo.model``, ``odoo.method``     |
+|                                         |                      | (``_OTHER`` for a failed call),     |
+|                                         |                      | ``error.type``: each attempt of an  |
+|                                         |                      | ORM call over RPC                   |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``db.client.operation.duration`` (s)    | histogram            | ``db.system.name``,                 |
+|                                         |                      | ``db.namespace``,                   |
+|                                         |                      | ``db.operation.name``: each SQL     |
+|                                         |                      | query of a request or a cron job    |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``db.client.connection.count``,         | up-down counter      | ``db.client.connection.pool.name``  |
+| ``db.client.connection.max``            |                      | (``read_write``, ``read_only``),    |
+|                                         |                      | ``db.client.connection.state``      |
+|                                         |                      | (``idle``, ``used``)                |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.db.pool.full``                   | counter              | ``db.client.connection.pool.name``: |
+|                                         |                      | connections refused, the pool being |
+|                                         |                      | full                                |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.cron.duration`` (s)              | histogram            | ``odoo.cron.name``,                 |
+|                                         |                      | ``odoo.cron.status`` (``failed``    |
+|                                         |                      | when the run raised)                |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.cron.lag`` (s)                   | histogram            | ``odoo.cron.name``: delay between   |
+|                                         |                      | the next call of a job and its run  |
+|                                         |                      | by the scheduler (not for a manual  |
+|                                         |                      | run, a run by a trigger, nor a job  |
+|                                         |                      | run again after ``partially done``) |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.worker.recycles``                | counter              | ``odoo.worker.recycle.reason``      |
+|                                         |                      | (``request_limit``,                 |
+|                                         |                      | ``memory_soft``, ``max_age``,       |
+|                                         |                      | ``parent_changed``)                 |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``odoo.worker.memory.limit``            | up-down counter      | ``odoo.limit.type`` (``soft``,      |
+|                                         |                      | ``hard``): compare with             |
+|                                         |                      | ``process.memory.virtual``          |
++-----------------------------------------+----------------------+-------------------------------------+
+| ``process.cpu.time``,                   | semantic conventions |                                     |
+| ``process.memory.usage``,               |                      |                                     |
+| ``process.memory.virtual``,             |                      |                                     |
+| ``process.thread.count``,               |                      |                                     |
+| ``process.unix.file_descriptor.count``, |                      |                                     |
+| ``process.context_switches``,           |                      |                                     |
+| ``process.uptime``, ``cpython.gc.*``    |                      |                                     |
++-----------------------------------------+----------------------+-------------------------------------+
+
+A duration measured in a sampled trace has an exemplar linking to it. An
+error of the user (as for the spans) has no ``error.type``; a JSON-RPC
+error, a 200 response, has the type of its exception.
+
 **Logs**: each record has its level, its logger (the instrumentation
 scope), its source (``code.file.path``, ``code.function.name``,
 ``code.line.number``), the trace and span ids of the current span, and
@@ -249,7 +336,9 @@ the database (``odoo.db``).
 ``OTEL_RESOURCE_ATTRIBUTES``: set it to the version of your deployment),
 ``service.instance.id`` (the host name, the pod name in Kubernetes),
 ``odoo.process.type`` (``http``, ``cron`` or ``threaded``),
-``process.pid``.
+``process.pid``. The metrics have ``service.instance.id`` followed by
+the PID (``odoo-7d4b9-x2k8p-17``): each worker exports its own series,
+which a recycled worker ends.
 
 **Never in the spans**: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters
@@ -270,11 +359,15 @@ Known issues / Roadmap
 Known limitations of this version:
 
 - The gevent process (websocket, longpolling) and the prefork master are
-  not instrumented, and their logs are not exported (startup, worker
-  recycling). Neither are metrics.
+  not instrumented: neither their metrics nor their logs (startup,
+  worker recycling) are exported.
 - A worker killed by Odoo (``limit_time_real``, ``limit_memory_hard``)
-  or by the system loses the spans and logs not exported yet; the span
-  of the request or cron job it was running is lost too.
+  or by the system loses the spans, logs and metrics not exported yet;
+  the span of the request or cron job it was running is lost too, and
+  its end is not counted in ``odoo.worker.recycles``.
+- ``db.client.operation.duration`` measures the queries of the requests
+  and cron jobs only, without the table nor the errors (a failed query
+  is measured as the others).
 - The span of a request ends when Odoo returns the response: the time
   spent streaming a large body (a file download) is not measured.
 - A request retried by Odoo on a concurrency error gives one RPC span

@@ -12,13 +12,16 @@ Standard OpenTelemetry variables, read by the SDK:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | none | Base URL of the collector, OTLP HTTP (`http://collector:4318`); enables both signals. |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | none | Full URL for one signal (`.../v1/traces`); enables this signal alone. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | none | Base URL of the collector, OTLP HTTP (`http://collector:4318`); enables the three signals. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | none | Full URL for one signal (`.../v1/traces`); enables this signal alone. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | none | Headers of the export requests, values URL-encoded: `Authorization=Bearer%20<token>` (URL-encode a token with `%`, `,`, `=` or `&`). |
 | `OTEL_SERVICE_NAME` | `odoo` | Service name. |
 | `OTEL_RESOURCE_ATTRIBUTES` | none | Extra resource attributes, which override those of the module: `deployment.environment.name=production,service.version=1.4.2`. Recommended: the environment, and the version of what is deployed (the image tag) as `service.version`, which is the Odoo version otherwise. |
 | `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | `parentbased_always_on` | Sampling of the traces. |
 | `OTEL_BSP_*`, `OTEL_BLRP_*` | SDK defaults | Batch processors of the spans and of the logs (queue size, delay). |
+| `OTEL_METRIC_EXPORT_INTERVAL` | `60000` | Interval between two exports of the metrics, in milliseconds. |
+| `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` | `cumulative` | `delta` for a backend that does not accept cumulative counters or histograms; they can also be converted in the collector (`cumulativetodelta` processor). |
+| `OTEL_METRICS_EXEMPLAR_FILTER` | `trace_based` | Exemplars: the measures of a sampled trace link to it. |
 | `OTEL_SDK_DISABLED` | `false` | `true` disables the module entirely. |
 
 Variables of the module:
@@ -26,6 +29,7 @@ Variables of the module:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `ODOO_OTEL_TRACES` | `true` | Export the traces (when an endpoint is set). |
+| `ODOO_OTEL_METRICS` | `true` | Export the metrics (when an endpoint is set). |
 | `ODOO_OTEL_LOGS` | `true` | Export the logs (when an endpoint is set). |
 | `ODOO_OTEL_LOG_LEVEL` | `INFO` | Minimum level of the exported logs, name or number. It filters on top of the Odoo log levels (`--log-level`, `--log-handler`): a record that Odoo does not log is never exported. |
 | `ODOO_OTEL_EXCLUDED_LOGGERS` | none | More loggers not exported, with their children. Always excluded: `opentelemetry`, `urllib3` and `requests` (the exporter), `odoo.http.server` and `werkzeug` (the HTTP access logs, which hold the query string and the session id; the traces replace them). |

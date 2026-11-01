@@ -370,14 +370,17 @@ ul.auto-toc {
 !! source digest: sha256:90173001c32a8799e66d5c4ddefa6956cb345e679d197b8f8e0b99fafe22bbe2
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! -->
 <p><a class="reference external image-reference" href="https://odoo-community.org/page/development-status"><img alt="Alpha" src="https://img.shields.io/badge/maturity-Alpha-red.png" /></a> <a class="reference external image-reference" href="http://www.gnu.org/licenses/lgpl-3.0-standalone.html"><img alt="License: LGPL-3" src="https://img.shields.io/badge/license-LGPL--3-blue.png" /></a> <a class="reference external image-reference" href="https://github.com/Skilldron/odoo-addons/tree/20.0/monitoring_opentelemetry"><img alt="Skilldron/odoo-addons" src="https://img.shields.io/badge/github-Skilldron%2Fodoo--addons-lightgray.png?logo=github" /></a></p>
-<p>Server-wide module that exports the traces and the logs of Odoo with
-OpenTelemetry, over OTLP HTTP, to any OpenTelemetry backend or collector
-(the OpenTelemetry Collector, Grafana Alloy, the Datadog Agent, Elastic
-EDOT…).</p>
+<p>Server-wide module that exports the traces, the metrics and the logs of
+Odoo with OpenTelemetry, over OTLP HTTP, to any OpenTelemetry backend or
+collector (the OpenTelemetry Collector, Grafana Alloy, the Datadog
+Agent, Elastic EDOT…).</p>
 <ul class="simple">
 <li><strong>Traces</strong>: one span per HTTP request, ORM call over RPC, cron job and
 slow SQL query, with the database, the user, the route, the model and
 the method.</li>
+<li><strong>Metrics</strong>: HTTP requests, ORM calls, SQL queries, cron jobs,
+connection pools, memory and CPU of each worker, worker recycles and
+concurrency retries.</li>
 <li><strong>Logs</strong>: the log records of Odoo, with the trace and span ids of the
 current request or cron job.</li>
 </ul>
@@ -434,9 +437,9 @@ OTLP endpoint, the module stays inactive and logs it at startup.</p>
 <p>Standard OpenTelemetry variables, read by the SDK:</p>
 <table border="1" class="docutils">
 <colgroup>
-<col width="30%" />
-<col width="20%" />
-<col width="50%" />
+<col width="37%" />
+<col width="18%" />
+<col width="45%" />
 </colgroup>
 <thead valign="bottom">
 <tr><th class="head">Variable</th>
@@ -448,9 +451,10 @@ OTLP endpoint, the module stays inactive and logs it at startup.</p>
 <tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_ENDPOINT</tt></td>
 <td>none</td>
 <td>Base URL of the collector, OTLP HTTP (<tt class="docutils literal"><span class="pre">http://collector:4318</span></tt>);
-enables both signals.</td>
+enables the three signals.</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</tt>,
+<tt class="docutils literal">OTEL_EXPORTER_OTLP_METRICS_ENDPOINT</tt>,
 <tt class="docutils literal">OTEL_EXPORTER_OTLP_LOGS_ENDPOINT</tt></td>
 <td>none</td>
 <td>Full URL for one signal (<tt class="docutils literal"><span class="pre">.../v1/traces</span></tt>); enables this signal
@@ -474,8 +478,7 @@ Recommended: the environment, and the version of what is deployed
 (the image tag) as <tt class="docutils literal">service.version</tt>, which is the Odoo version
 otherwise.</td>
 </tr>
-<tr><td><tt class="docutils literal">OTEL_TRACES_SAMPLER</tt>,
-<tt class="docutils literal">OTEL_TRACES_SAMPLER_ARG</tt></td>
+<tr><td><tt class="docutils literal">OTEL_TRACES_SAMPLER</tt>, <tt class="docutils literal">OTEL_TRACES_SAMPLER_ARG</tt></td>
 <td><tt class="docutils literal">parentbased_always_on</tt></td>
 <td>Sampling of the traces.</td>
 </tr>
@@ -483,6 +486,20 @@ otherwise.</td>
 <td>SDK defaults</td>
 <td>Batch processors of the spans and of the logs (queue size,
 delay).</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_METRIC_EXPORT_INTERVAL</tt></td>
+<td><tt class="docutils literal">60000</tt></td>
+<td>Interval between two exports of the metrics, in milliseconds.</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE</tt></td>
+<td><tt class="docutils literal">cumulative</tt></td>
+<td><tt class="docutils literal">delta</tt> for a backend that does not accept cumulative counters
+or histograms; they can also be converted in the collector
+(<tt class="docutils literal">cumulativetodelta</tt> processor).</td>
+</tr>
+<tr><td><tt class="docutils literal">OTEL_METRICS_EXEMPLAR_FILTER</tt></td>
+<td><tt class="docutils literal">trace_based</tt></td>
+<td>Exemplars: the measures of a sampled trace link to it.</td>
 </tr>
 <tr><td><tt class="docutils literal">OTEL_SDK_DISABLED</tt></td>
 <td><tt class="docutils literal">false</tt></td>
@@ -508,6 +525,11 @@ delay).</td>
 <td><tt class="docutils literal">true</tt></td>
 <td>Export the traces (when an
 endpoint is set).</td>
+</tr>
+<tr><td><tt class="docutils literal">ODOO_OTEL_METRICS</tt></td>
+<td><tt class="docutils literal">true</tt></td>
+<td>Export the metrics (when
+an endpoint is set).</td>
 </tr>
 <tr><td><tt class="docutils literal">ODOO_OTEL_LOGS</tt></td>
 <td><tt class="docutils literal">true</tt></td>
@@ -661,6 +683,113 @@ the exception of a run, user error included, is an event of its span
 as <tt class="docutils literal">failed</tt>.</p>
 <p>An incoming <tt class="docutils literal">traceparent</tt> header continues the trace of the caller (a
 reverse proxy, another service).</p>
+<p><strong>Metrics</strong>, exported by each process every
+<tt class="docutils literal">OTEL_METRIC_EXPORT_INTERVAL</tt>, with or without the traces:</p>
+<table border="1" class="docutils">
+<colgroup>
+<col width="41%" />
+<col width="22%" />
+<col width="37%" />
+</colgroup>
+<thead valign="bottom">
+<tr><th class="head">Metric</th>
+<th class="head">Type</th>
+<th class="head">Attributes</th>
+</tr>
+</thead>
+<tbody valign="top">
+<tr><td><tt class="docutils literal">http.server.request.duration</tt> (s)</td>
+<td>histogram</td>
+<td><tt class="docutils literal">http.request.method</tt>,
+<tt class="docutils literal">http.route</tt>,
+<tt class="docutils literal">http.response.status_code</tt>,
+<tt class="docutils literal">url.scheme</tt>,
+<tt class="docutils literal">network.protocol.version</tt>,
+<tt class="docutils literal">error.type</tt></td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.http.sql.count</tt></td>
+<td>histogram</td>
+<td><tt class="docutils literal">http.request.method</tt>,
+<tt class="docutils literal">http.route</tt>: the SQL queries of
+a request</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.http.retries</tt></td>
+<td>counter</td>
+<td><tt class="docutils literal">http.route</tt>: the attempts of a
+request or an RPC call that Odoo
+runs again after a concurrency
+error</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.rpc.duration</tt> (s)</td>
+<td>histogram</td>
+<td><tt class="docutils literal">odoo.model</tt>, <tt class="docutils literal">odoo.method</tt>
+(<tt class="docutils literal">_OTHER</tt> for a failed call),
+<tt class="docutils literal">error.type</tt>: each attempt of an
+ORM call over RPC</td>
+</tr>
+<tr><td><tt class="docutils literal">db.client.operation.duration</tt> (s)</td>
+<td>histogram</td>
+<td><tt class="docutils literal">db.system.name</tt>,
+<tt class="docutils literal">db.namespace</tt>,
+<tt class="docutils literal">db.operation.name</tt>: each SQL
+query of a request or a cron job</td>
+</tr>
+<tr><td><tt class="docutils literal">db.client.connection.count</tt>,
+<tt class="docutils literal">db.client.connection.max</tt></td>
+<td>up-down counter</td>
+<td><tt class="docutils literal">db.client.connection.pool.name</tt>
+(<tt class="docutils literal">read_write</tt>, <tt class="docutils literal">read_only</tt>),
+<tt class="docutils literal">db.client.connection.state</tt>
+(<tt class="docutils literal">idle</tt>, <tt class="docutils literal">used</tt>)</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.db.pool.full</tt></td>
+<td>counter</td>
+<td><tt class="docutils literal">db.client.connection.pool.name</tt>:
+connections refused, the pool being
+full</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.cron.duration</tt> (s)</td>
+<td>histogram</td>
+<td><tt class="docutils literal">odoo.cron.name</tt>,
+<tt class="docutils literal">odoo.cron.status</tt> (<tt class="docutils literal">failed</tt>
+when the run raised)</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.cron.lag</tt> (s)</td>
+<td>histogram</td>
+<td><tt class="docutils literal">odoo.cron.name</tt>: delay between
+the next call of a job and its run
+by the scheduler (not for a manual
+run, a run by a trigger, nor a job
+run again after <tt class="docutils literal">partially done</tt>)</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.worker.recycles</tt></td>
+<td>counter</td>
+<td><tt class="docutils literal">odoo.worker.recycle.reason</tt>
+(<tt class="docutils literal">request_limit</tt>,
+<tt class="docutils literal">memory_soft</tt>, <tt class="docutils literal">max_age</tt>,
+<tt class="docutils literal">parent_changed</tt>)</td>
+</tr>
+<tr><td><tt class="docutils literal">odoo.worker.memory.limit</tt></td>
+<td>up-down counter</td>
+<td><tt class="docutils literal">odoo.limit.type</tt> (<tt class="docutils literal">soft</tt>,
+<tt class="docutils literal">hard</tt>): compare with
+<tt class="docutils literal">process.memory.virtual</tt></td>
+</tr>
+<tr><td><tt class="docutils literal">process.cpu.time</tt>,
+<tt class="docutils literal">process.memory.usage</tt>,
+<tt class="docutils literal">process.memory.virtual</tt>,
+<tt class="docutils literal">process.thread.count</tt>,
+<tt class="docutils literal">process.unix.file_descriptor.count</tt>,
+<tt class="docutils literal">process.context_switches</tt>,
+<tt class="docutils literal">process.uptime</tt>, <tt class="docutils literal">cpython.gc.*</tt></td>
+<td>semantic conventions</td>
+<td>&nbsp;</td>
+</tr>
+</tbody>
+</table>
+<p>A duration measured in a sampled trace has an exemplar linking to it. An
+error of the user (as for the spans) has no <tt class="docutils literal">error.type</tt>; a JSON-RPC
+error, a 200 response, has the type of its exception.</p>
 <p><strong>Logs</strong>: each record has its level, its logger (the instrumentation
 scope), its source (<tt class="docutils literal">code.file.path</tt>, <tt class="docutils literal">code.function.name</tt>,
 <tt class="docutils literal">code.line.number</tt>), the trace and span ids of the current span, and
@@ -670,7 +799,9 @@ the database (<tt class="docutils literal">odoo.db</tt>).</p>
 <tt class="docutils literal">OTEL_RESOURCE_ATTRIBUTES</tt>: set it to the version of your deployment),
 <tt class="docutils literal">service.instance.id</tt> (the host name, the pod name in Kubernetes),
 <tt class="docutils literal">odoo.process.type</tt> (<tt class="docutils literal">http</tt>, <tt class="docutils literal">cron</tt> or <tt class="docutils literal">threaded</tt>),
-<tt class="docutils literal">process.pid</tt>.</p>
+<tt class="docutils literal">process.pid</tt>. The metrics have <tt class="docutils literal">service.instance.id</tt> followed by
+the PID (<tt class="docutils literal"><span class="pre">odoo-7d4b9-x2k8p-17</span></tt>): each worker exports its own series,
+which a recycled worker ends.</p>
 <p><strong>Never in the spans</strong>: the query string, the cookies, the headers other
 than the user agent, the request and response bodies, the SQL parameters
 and the literal values of the queries. The logs never include the HTTP
@@ -688,11 +819,15 @@ the collector and its storage: set its retention accordingly.</p>
 <p>Known limitations of this version:</p>
 <ul class="simple">
 <li>The gevent process (websocket, longpolling) and the prefork master are
-not instrumented, and their logs are not exported (startup, worker
-recycling). Neither are metrics.</li>
+not instrumented: neither their metrics nor their logs (startup,
+worker recycling) are exported.</li>
 <li>A worker killed by Odoo (<tt class="docutils literal">limit_time_real</tt>, <tt class="docutils literal">limit_memory_hard</tt>)
-or by the system loses the spans and logs not exported yet; the span
-of the request or cron job it was running is lost too.</li>
+or by the system loses the spans, logs and metrics not exported yet;
+the span of the request or cron job it was running is lost too, and
+its end is not counted in <tt class="docutils literal">odoo.worker.recycles</tt>.</li>
+<li><tt class="docutils literal">db.client.operation.duration</tt> measures the queries of the requests
+and cron jobs only, without the table nor the errors (a failed query
+is measured as the others).</li>
 <li>The span of a request ends when Odoo returns the response: the time
 spent streaming a large body (a file download) is not measured.</li>
 <li>A request retried by Odoo on a concurrency error gives one RPC span

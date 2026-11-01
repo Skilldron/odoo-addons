@@ -1,11 +1,14 @@
 Known limitations of this version:
 
 - The gevent process (websocket, longpolling) and the prefork master are not
-  instrumented, and their logs are not exported (startup, worker recycling). Neither
-  are metrics.
+  instrumented: neither their metrics nor their logs (startup, worker recycling) are
+  exported.
 - A worker killed by Odoo (`limit_time_real`, `limit_memory_hard`) or by the system
-  loses the spans and logs not exported yet; the span of the request or cron job it
-  was running is lost too.
+  loses the spans, logs and metrics not exported yet; the span of the request or cron
+  job it was running is lost too, and its end is not counted in
+  `odoo.worker.recycles`.
+- `db.client.operation.duration` measures the queries of the requests and cron jobs
+  only, without the table nor the errors (a failed query is measured as the others).
 - The span of a request ends when Odoo returns the response: the time spent
   streaming a large body (a file download) is not measured.
 - A request retried by Odoo on a concurrency error gives one RPC span per attempt
