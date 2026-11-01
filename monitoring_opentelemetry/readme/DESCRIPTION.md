@@ -1,6 +1,6 @@
 Server-wide module that exports the traces and the logs of Odoo with OpenTelemetry,
-over OTLP HTTP, to an OpenTelemetry collector (an Elastic EDOT collector, the
-OpenTelemetry Collector...).
+over OTLP HTTP, to any OpenTelemetry backend or collector (the OpenTelemetry
+Collector, Grafana Alloy, the Datadog Agent, Elastic EDOT...).
 
 - **Traces**: one span per HTTP request, ORM call over RPC, cron job and slow SQL
   query, with the database, the user, the route, the model and the method.
