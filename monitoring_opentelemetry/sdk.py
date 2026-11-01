@@ -5,7 +5,8 @@ the prefork master: its exporters, batch threads and this module's state must no
 shared with forked workers. The state of the process is an immutable snapshot tagged
 with its PID and replaced in one assignment, so a reader never sees it half set up,
 and a forked child never uses the one of its parent: in any process without its own
-SDK, :func:`tracer` returns a no-op tracer and :func:`logger_provider` ``None``.
+SDK, :func:`tracer` and :func:`meter` return no-op ones and :func:`logger_provider`
+``None``.
 
 The global OpenTelemetry providers are not set: the instrumentation of this module
 uses the providers below explicitly.
@@ -17,11 +18,14 @@ import socket
 import threading
 from dataclasses import dataclass
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import OTELResourceDetector, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -32,6 +36,7 @@ _logger = logging.getLogger(__name__)
 
 INSTRUMENTATION_NAME = "odoo.addons.monitoring_opentelemetry"
 _NOOP_TRACER = trace.NoOpTracer()
+_NOOP_METER = metrics.NoOpMeter(INSTRUMENTATION_NAME)
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,8 @@ class _Active:
     tracer_provider: TracerProvider | None
     tracer: trace.Tracer | None
     logger_provider: LoggerProvider | None
+    meter_provider: MeterProvider | None
+    meter: metrics.Meter | None
 
 
 _active = None
@@ -82,6 +89,14 @@ def tracer():
     return _NOOP_TRACER
 
 
+def meter():
+    """The meter of the current process, a no-op meter if inactive."""
+    active = _current()
+    if active and active.meter is not None:
+        return active.meter
+    return _NOOP_METER
+
+
 def logger_provider():
     """The logger provider of the current process, ``None`` if inactive."""
     active = _current()
@@ -106,13 +121,33 @@ def build_resource(process_type):
     return Resource.create(defaults).merge(OTELResourceDetector().detect())
 
 
-def setup(config, process_type, span_processor=None, log_processor=None):
+def build_metrics_resource(resource):
+    """Resource of the metrics of the process: ``resource`` with the PID appended to
+    ``service.instance.id``.
+
+    The workers of a host share its ``service.instance.id``; each one exports its own
+    cumulative series, which must not be mixed up with the ones of the others.
+    """
+    instance_id = resource.attributes["service.instance.id"]
+    return resource.merge(
+        Resource({"service.instance.id": f"{instance_id}-{os.getpid()}"})
+    )
+
+
+def setup(
+    config,
+    process_type,
+    span_processor=None,
+    log_processor=None,
+    metric_reader=None,
+):
     """Set up the SDK in the current process, once.
 
     :param config: the :class:`~.config.Config`, enabled
     :param process_type: ``http``, ``cron`` or ``threaded``
     :param span_processor: processor replacing the OTLP batch one (tests)
     :param log_processor: processor replacing the OTLP batch one (tests)
+    :param metric_reader: reader replacing the OTLP periodic one (tests)
     :return: whether the SDK was set up by this call
     :raise: on failure, after shutting down what was built
     """
@@ -120,7 +155,7 @@ def setup(config, process_type, span_processor=None, log_processor=None):
     with _lock:
         if _current():
             return False
-        tracer_provider = logger_provider_ = None
+        tracer_provider = logger_provider_ = meter_provider = reader = None
         try:
             resource = build_resource(process_type)
             if config.traces:
@@ -133,8 +168,19 @@ def setup(config, process_type, span_processor=None, log_processor=None):
                 logger_provider_.add_log_record_processor(
                     log_processor or BatchLogRecordProcessor(OTLPLogExporter())
                 )
+            if config.metrics:
+                reader = metric_reader or PeriodicExportingMetricReader(
+                    OTLPMetricExporter()
+                )
+                meter_provider = MeterProvider(
+                    metric_readers=[reader], resource=build_metrics_resource(resource)
+                )
         except Exception:
-            _shutdown_providers(tracer_provider, logger_provider_)
+            # a periodic reader runs its own thread until its provider, or itself,
+            # is shut down
+            _shutdown_providers(
+                tracer_provider, logger_provider_, meter_provider or reader
+            )
             raise
         _active = _Active(
             pid=os.getpid(),
@@ -146,6 +192,12 @@ def setup(config, process_type, span_processor=None, log_processor=None):
                 else None
             ),
             logger_provider=logger_provider_,
+            meter_provider=meter_provider,
+            meter=(
+                meter_provider.get_meter(INSTRUMENTATION_NAME, release.version)
+                if meter_provider
+                else None
+            ),
         )
     _logger.debug("OpenTelemetry SDK set up (%s process)", process_type)
     return True
@@ -159,7 +211,9 @@ def shutdown():
         if active is None:
             return
         _active = None
-    _shutdown_providers(active.tracer_provider, active.logger_provider)
+    _shutdown_providers(
+        active.tracer_provider, active.logger_provider, active.meter_provider
+    )
 
 
 def _shutdown_providers(*providers):

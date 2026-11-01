@@ -21,6 +21,10 @@ class TestConfig(BaseCase):
         self.assertEqual((result.enabled, result.traces, result.logs), (1, 1, 0))
         result = config.load({config.LOGS_ENDPOINT: "http://c:4318/v1/logs"})
         self.assertEqual((result.enabled, result.traces, result.logs), (1, 0, 1))
+        result = config.load({config.METRICS_ENDPOINT: "http://c:4318/v1/metrics"})
+        self.assertEqual(
+            (result.enabled, result.traces, result.logs, result.metrics), (1, 0, 0, 1)
+        )
 
     def test_sdk_disabled(self):
         result = config.load({**ENDPOINT, "OTEL_SDK_DISABLED": "TRUE"})
@@ -32,7 +36,7 @@ class TestConfig(BaseCase):
     def test_defaults(self):
         result = config.load(ENDPOINT)
         self.assertEqual(result, config.Config(enabled=True))
-        self.assertEqual((result.traces, result.logs), (True, True))
+        self.assertEqual((result.traces, result.logs, result.metrics), (1, 1, 1))
         self.assertEqual(result.log_level, logging.INFO)
         self.assertEqual(result.excluded_paths, ("/websocket",))
         self.assertEqual(
@@ -46,6 +50,7 @@ class TestConfig(BaseCase):
             {
                 **ENDPOINT,
                 "ODOO_OTEL_LOGS": "false",
+                "ODOO_OTEL_METRICS": "off",
                 "ODOO_OTEL_LOG_LEVEL": "warning",
                 "ODOO_OTEL_EXCLUDED_LOGGERS": "a, urllib3,,",
                 "ODOO_OTEL_EXCLUDED_PATHS": "",
@@ -55,6 +60,7 @@ class TestConfig(BaseCase):
         )
         self.assertTrue(result.traces)
         self.assertFalse(result.logs)
+        self.assertFalse(result.metrics)
         self.assertEqual(result.log_level, logging.WARNING)
         # the loggers of the exporter and the access logs are always excluded
         self.assertEqual(
@@ -92,6 +98,11 @@ class TestConfig(BaseCase):
 
     def test_no_signal(self):
         result = config.load(
-            {**ENDPOINT, "ODOO_OTEL_TRACES": "0", "ODOO_OTEL_LOGS": "no"}
+            {
+                **ENDPOINT,
+                "ODOO_OTEL_TRACES": "0",
+                "ODOO_OTEL_LOGS": "no",
+                "ODOO_OTEL_METRICS": "false",
+            }
         )
         self.assertFalse(result.enabled)

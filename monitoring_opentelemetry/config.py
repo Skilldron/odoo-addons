@@ -15,6 +15,7 @@ _logger = logging.getLogger(__name__)
 ENDPOINT = "OTEL_EXPORTER_OTLP_ENDPOINT"
 TRACES_ENDPOINT = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 LOGS_ENDPOINT = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
+METRICS_ENDPOINT = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
 SQL_MODES = ("off", "slow", "all")
 # Never exported: the exporter logs through the first ones, exporting them would loop;
 # the HTTP access logs (odoo.http.server in Odoo 20, werkzeug) hold the query string and
@@ -35,6 +36,7 @@ class Config:
     enabled: bool = False
     traces: bool = True
     logs: bool = True
+    metrics: bool = True
     log_level: int = logging.INFO
     excluded_loggers: tuple[str, ...] = (
         MANDATORY_EXCLUDED_LOGGERS + DEFAULT_EXCLUDED_LOGGERS
@@ -122,7 +124,10 @@ def load(environ=None):
     logs = (generic or _is_set(environ, LOGS_ENDPOINT)) and _bool(
         environ, "ODOO_OTEL_LOGS", True
     )
-    if not (traces or logs):
+    metrics = (generic or _is_set(environ, METRICS_ENDPOINT)) and _bool(
+        environ, "ODOO_OTEL_METRICS", True
+    )
+    if not (traces or logs or metrics):
         return Config(
             disabled_reason=f"no signal enabled with an endpoint ({ENDPOINT})"
         )
@@ -133,6 +138,7 @@ def load(environ=None):
         enabled=True,
         traces=traces,
         logs=logs,
+        metrics=metrics,
         log_level=_log_level(environ, "ODOO_OTEL_LOG_LEVEL", logging.INFO),
         excluded_loggers=MANDATORY_EXCLUDED_LOGGERS
         + tuple(

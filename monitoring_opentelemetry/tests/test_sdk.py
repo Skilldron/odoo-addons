@@ -2,7 +2,12 @@ import os
 import warnings
 from unittest.mock import patch
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.sdk._logs.export import (
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -23,6 +28,7 @@ class TestSdk(OtelMixin, BaseCase):
         self.assertIsInstance(sdk.tracer(), trace.NoOpTracer)
         self.assertIsNone(sdk.logger_provider())
         self.assertIsNone(sdk.config())
+        self.assertIsInstance(sdk.meter(), metrics.NoOpMeter)
 
     def test_setup_once(self):
         self.setup_otel()
@@ -45,6 +51,35 @@ class TestSdk(OtelMixin, BaseCase):
         self.assertEqual(attributes["odoo.process.type"], "cron")
         self.assertEqual(attributes["process.pid"], os.getpid())
 
+    def test_metrics(self):
+        self.setup_otel(process_type="cron")
+        sdk.meter().create_counter("test.count").add(2, {"key": "value"})
+        collected, resource = self.collect_metrics()
+        (point,) = collected["test.count"].data.data_points
+        self.assertEqual((point.value, dict(point.attributes)), (2, {"key": "value"}))
+        # the workers of a host share its service.instance.id, their metrics do not
+        with sdk.tracer().start_as_current_span("test"):
+            pass
+        traces_resource = self.finished_spans()[0].resource.attributes
+        self.assertEqual(
+            resource.attributes["service.instance.id"],
+            f"{traces_resource['service.instance.id']}-{os.getpid()}",
+        )
+        self.assertEqual(
+            {**resource.attributes, "service.instance.id": None},
+            {**traces_resource, "service.instance.id": None},
+        )
+
+    def test_metrics_instance_id_from_environment(self):
+        environ = {"OTEL_RESOURCE_ATTRIBUTES": "service.instance.id=erp-1"}
+        with patch.dict(os.environ, environ):
+            self.setup_otel()
+        sdk.meter().create_counter("test.count").add(1)
+        _collected, resource = self.collect_metrics()
+        self.assertEqual(
+            resource.attributes["service.instance.id"], f"erp-1-{os.getpid()}"
+        )
+
     def test_resource_environment_overrides(self):
         environ = {
             "OTEL_SERVICE_NAME": "erp",
@@ -66,6 +101,7 @@ class TestSdk(OtelMixin, BaseCase):
             self.assertFalse(sdk.is_active())
             self.assertIsInstance(sdk.tracer(), trace.NoOpTracer)
             self.assertIsNone(sdk.logger_provider())
+            self.assertIsInstance(sdk.meter(), metrics.NoOpMeter)
 
     def test_fork(self):
         """In a real forked child, the SDK of the parent is inactive and the child
@@ -80,8 +116,19 @@ class TestSdk(OtelMixin, BaseCase):
             try:
                 result = [sdk.is_active()]
                 processor = SimpleSpanProcessor(InMemorySpanExporter())
-                result.append(sdk.setup(Config(enabled=True), "http", processor))
+                reader = InMemoryMetricReader()
+                result.append(
+                    sdk.setup(
+                        Config(enabled=True), "http", processor, metric_reader=reader
+                    )
+                )
                 result.append(sdk.is_active())
+                sdk.meter().create_counter("test.count").add(1)
+                (resource_metrics,) = reader.get_metrics_data().resource_metrics
+                attributes = resource_metrics.resource.attributes
+                result.append(
+                    attributes["service.instance.id"].endswith(f"-{os.getpid()}")
+                )
                 os.write(write_fd, repr(result).encode())
             finally:
                 os._exit(0)
@@ -89,7 +136,7 @@ class TestSdk(OtelMixin, BaseCase):
         with os.fdopen(read_fd) as pipe:
             result = pipe.read()
         os.waitpid(pid, 0)
-        self.assertEqual(result, "[False, True, True]")
+        self.assertEqual(result, "[False, True, True, True]")
         self.assertTrue(sdk.is_active())
 
     def test_setup_failure_is_atomic(self):
@@ -109,10 +156,39 @@ class TestSdk(OtelMixin, BaseCase):
         tracer_shutdown.assert_called_once()
         self.assertFalse(sdk.is_active())
 
+    def test_metrics_setup_failure_is_atomic(self):
+        """A failure of the meter provider shuts down the other providers and the
+        reader it did not take."""
+        reader = InMemoryMetricReader()
+        with (
+            patch.object(sdk, "MeterProvider", side_effect=ValueError("boom")),
+            patch.object(sdk.TracerProvider, "shutdown", autospec=True) as tracer,
+            patch.object(sdk.LoggerProvider, "shutdown", autospec=True) as logger,
+            patch.object(reader, "shutdown") as reader_shutdown,
+            self.assertRaises(ValueError),
+        ):
+            sdk.setup(
+                Config(enabled=True),
+                "http",
+                span_processor=SimpleSpanProcessor(InMemorySpanExporter()),
+                log_processor=SimpleLogRecordProcessor(InMemoryLogRecordExporter()),
+                metric_reader=reader,
+            )
+        tracer.assert_called_once()
+        logger.assert_called_once()
+        reader_shutdown.assert_called_once()
+        self.assertFalse(sdk.is_active())
+
     def test_shutdown(self):
         self.setup_otel()
-        sdk.shutdown()
+        sdk.meter().create_counter("test.count").add(1)
+        with patch.object(
+            self.metric_reader, "shutdown", wraps=self.metric_reader.shutdown
+        ) as reader_shutdown:
+            sdk.shutdown()
+        reader_shutdown.assert_called_once()  # by the meter provider
         self.assertFalse(sdk.is_active())
+        self.assertIsInstance(sdk.meter(), metrics.NoOpMeter)
         sdk.shutdown()
 
     def test_shutdown_failure_is_logged(self):
@@ -133,3 +209,6 @@ class TestSdk(OtelMixin, BaseCase):
         self.setup_otel(Config(enabled=True, logs=False))
         self.assertNotIsInstance(sdk.tracer(), trace.NoOpTracer)
         self.assertIsNone(sdk.logger_provider())
+        self.assertNotIsInstance(sdk.meter(), metrics.NoOpMeter)
+        self.setup_otel(Config(enabled=True, metrics=False))
+        self.assertIsInstance(sdk.meter(), metrics.NoOpMeter)
