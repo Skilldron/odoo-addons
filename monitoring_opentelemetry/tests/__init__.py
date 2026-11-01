@@ -3,6 +3,7 @@ from . import (
     test_hooks,
     test_http,
     test_logs,
+    test_orm_sql_metrics,
     test_patch,
     test_process,
     test_sdk,

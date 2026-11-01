@@ -80,10 +80,9 @@ class TestHooks(BaseCase):
         register.assert_any_call(hooks.deactivate)
 
     def test_metrics_without_traces(self):
-        # the HTTP instrumentation measures the requests, the other ones trace
         self.post_load({**ENDPOINT, "ODOO_OTEL_TRACES": "false"})
         self.assertTrue(_patch.is_patched(router.Application, "__call__"))
-        self.assertFalse(_patch.is_patched(service_model, "call_kw"))
+        self.assertTrue(_patch.is_patched(service_model, "call_kw"))
 
     def test_stop_after_init(self):
         setup, _register, _output = self.post_load(

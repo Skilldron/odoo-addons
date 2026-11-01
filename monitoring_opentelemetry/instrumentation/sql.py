@@ -12,6 +12,11 @@ The query text is recorded as executed, with its placeholders, truncated: string
 numeric literals are replaced by ``?`` and comments removed (``execute_values`` and
 ``mogrify`` inline the parameters). The parameters themselves are never recorded.
 A failed query is recorded like the others: the hook does not see its exception.
+
+``db.client.operation.duration`` measures each query of a request or a cron job
+once (a job run manually tracks its queries inside the tracking of its request), with
+or without the traces, by operation (the first word of the query) and database: not
+by table, nor with an ``error.type`` (the hook cannot tell a failed query reliably).
 """
 
 import contextlib
@@ -42,6 +47,8 @@ _LITERAL_OR_COMMENT = re.compile(
 )
 _FIRST_WORD = re.compile(r"\s*([A-Za-z]+)")
 _UPDATE_TABLE = re.compile(r'\s*UPDATE\s+"?(\w+)', re.IGNORECASE)
+# advice of the semantic conventions for db.client.operation.duration
+DURATION_BUCKETS = (0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0)
 
 
 def _safely(function, *args):
@@ -61,6 +68,27 @@ def query_text(query):
     query = query[: QUERY_TEXT_MAX_LENGTH * 4]
     masked = _LITERAL_OR_COMMENT.sub(_mask, query)
     return masked.strip()[:QUERY_TEXT_MAX_LENGTH]
+
+
+def operation_name(query):
+    """The first word of ``query`` as executed, upper case (``WITH`` for a common
+    table expression); ``None`` if it is not a string or starts otherwise (a comment,
+    a parenthesis). The spans name the operation from the masked text instead."""
+    if isinstance(query, bytes):
+        query = query[:64].decode("utf-8", "replace")
+    if not isinstance(query, str):
+        return None
+    match = _FIRST_WORD.match(query)
+    return match.group(1).upper() if match else None
+
+
+def _operation_duration(meter):
+    return meter.create_histogram(
+        "db.client.operation.duration",
+        unit="s",
+        description="Duration of database client operations.",
+        explicit_bucket_boundaries_advisory=DURATION_BUCKETS,
+    )
 
 
 def _mask(match):
@@ -99,20 +127,32 @@ class _Tracker:
     """The query hook of a traced request or cron job."""
 
     def __init__(self, config):
-        self.mode = config.sql
+        # no span to build without the traces (the metrics only)
+        self.mode = config.sql if config.traces else "off"
         self.slow = config.sql_slow_ms / 1000
         self.count = 0
         self.duration = 0.0
+        self.histogram = sdk.instrument(_operation_duration)
 
     def hook(self, cursor, query, params, start, *args):
         self.count += 1
 
         def done(duration):
             self.duration += duration
+            if self.histogram is not None:
+                _safely(self.record, cursor, query, duration)
             if self.mode == "all" or (self.mode == "slow" and duration >= self.slow):
                 _safely(_query_span, cursor, query, start, duration)
 
         return done
+
+    def record(self, cursor, query, duration):
+        attributes = {"db.system.name": "postgresql"}
+        if dbname := getattr(cursor, "dbname", None):
+            attributes["db.namespace"] = dbname
+        if operation := operation_name(query):
+            attributes["db.operation.name"] = operation
+        self.histogram.record(duration, attributes)
 
 
 @contextlib.contextmanager
@@ -122,6 +162,9 @@ def track(span, config):
     hooks = None
     try:
         hooks = vars(threading.current_thread()).setdefault("query_hooks", [])
+        # an outer tracker already measures the queries
+        if any(isinstance(getattr(hook, "__self__", None), _Tracker) for hook in hooks):
+            tracker.histogram = None
         hooks.append(tracker.hook)
     except Exception:
         _logger.debug("OpenTelemetry instrumentation failed", exc_info=True)

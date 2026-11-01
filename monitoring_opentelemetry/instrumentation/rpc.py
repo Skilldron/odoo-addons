@@ -9,10 +9,16 @@ use it: its span wraps ``serve_ir_http`` when the route has these arguments.
 Span names come from validated values only: an existing model, and a public method
 of it (``_OTHER`` otherwise), so that callers cannot create arbitrary span names.
 A call retried by Odoo (serialization failure) gives one span per attempt.
+
+``odoo.rpc.duration`` measures each call (attempt), with or without the traces, by
+model and method, and ``error.type`` for an error of the server. A failed call is
+measured under the ``_OTHER`` method: any user can call any public method of a model,
+which must not fill the series of the metric (spans are not kept in the process).
 """
 
 import logging
 import sys
+import time
 
 from opentelemetry.trace import SpanKind
 
@@ -25,6 +31,32 @@ from ._patch import patch, unpatch
 
 _logger = logging.getLogger(__name__)
 _call_kw_owners = []
+# longer than the HTTP requests: imports, reports, postings
+DURATION_BUCKETS = (
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    300.0,
+)
+
+
+def _duration(meter):
+    return meter.create_histogram(
+        "odoo.rpc.duration",
+        unit="s",
+        description="Duration of the ORM calls over RPC.",
+        explicit_bucket_boundaries_advisory=DURATION_BUCKETS,
+    )
 
 
 def method_label(model_class, name):
@@ -48,16 +80,33 @@ def _span(model, method):
     )
 
 
-def _call(span_factory, original, *args):
-    with span_factory() as span:
+def _record_duration(attributes, start):
+    if duration := sdk.instrument(_duration):
+        duration.record(time.perf_counter() - start, attributes)
+
+
+def _call(model, method, original, *args):
+    attributes = {"odoo.model": model, "odoo.method": method}
+    start = time.perf_counter()
+    with _span(model, method) as span:
         try:
             return original(*args)
-        except Exception as exc:
+        except BaseException as exc:
             try:
-                errors.record(span, exc)
+                attributes["odoo.method"] = "_OTHER"
+                if not errors.is_user_error(exc):
+                    attributes["error.type"] = errors.qualified_name(exc)
+                if isinstance(exc, Exception):
+                    errors.record(span, exc)
             except Exception:
                 _logger.debug("OpenTelemetry instrumentation failed", exc_info=True)
             raise
+        finally:
+            # in the context of the span: the exemplars of its trace
+            try:
+                _record_duration(attributes, start)
+            except Exception:
+                _logger.debug("OpenTelemetry instrumentation failed", exc_info=True)
 
 
 def _make_call_kw(original):
@@ -65,9 +114,7 @@ def _make_call_kw(original):
         if not sdk.is_active():
             return original(model, name, args, kwargs)
         method = method_label(type(model), name)
-        return _call(
-            lambda: _span(model._name, method), original, model, name, args, kwargs
-        )
+        return _call(model._name, method, original, model, name, args, kwargs)
 
     return call_kw
 
@@ -93,7 +140,7 @@ def _make_serve_ir_http(original):
             model_method = None
         if model_method is None:
             return original(request, rule, args)
-        return _call(lambda: _span(*model_method), original, request, rule, args)
+        return _call(*model_method, original, request, rule, args)
 
     return serve_ir_http
 

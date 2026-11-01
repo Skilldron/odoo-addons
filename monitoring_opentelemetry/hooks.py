@@ -67,8 +67,8 @@ def install(config):
     )
     if config.traces or config.metrics:
         http_instrumentation.install()
-    if config.traces:
         rpc_instrumentation.install()
+    if config.traces:
         cron_instrumentation.install()
 
 
