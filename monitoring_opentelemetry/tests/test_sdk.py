@@ -80,6 +80,24 @@ class TestSdk(OtelMixin, BaseCase):
             resource.attributes["service.instance.id"], f"erp-1-{os.getpid()}"
         )
 
+    def test_instrument(self):
+        def create(meter):
+            return meter.create_counter("test.count")
+
+        self.assertIsNone(sdk.instrument(create))  # inactive
+        self.setup_otel()
+        counter = sdk.instrument(create)
+        self.assertIs(sdk.instrument(create), counter)  # created once per process
+        counter.add(3)
+        collected, _resource = self.collect_metrics()
+        self.assertEqual(collected["test.count"].data.data_points[0].value, 3)
+        with patch.object(sdk.os, "getpid", return_value=os.getpid() + 1):
+            self.assertIsNone(sdk.instrument(create))
+        self.setup_otel()  # a new provider, new instruments
+        self.assertIsNot(sdk.instrument(create), counter)
+        self.setup_otel(Config(enabled=True, metrics=False))
+        self.assertIsNone(sdk.instrument(create))
+
     def test_resource_environment_overrides(self):
         environ = {
             "OTEL_SERVICE_NAME": "erp",

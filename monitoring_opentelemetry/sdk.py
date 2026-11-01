@@ -16,7 +16,7 @@ import logging
 import os
 import socket
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -48,6 +48,13 @@ class _Active:
     logger_provider: LoggerProvider | None
     meter_provider: MeterProvider | None
     meter: metrics.Meter | None
+    # instruments created by instrument(), by factory
+    instruments: dict[object, object] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+    instruments_lock: threading.Lock = field(
+        default_factory=threading.Lock, compare=False, repr=False
+    )
 
 
 _active = None
@@ -95,6 +102,26 @@ def meter():
     if active and active.meter is not None:
         return active.meter
     return _NOOP_METER
+
+
+def instrument(create):
+    """The instrument ``create(meter)`` of the current process, created once; ``None``
+    if its metrics are inactive.
+
+    The instruments of a process belong to its meter provider: created on first use,
+    after the setup of the SDK in the process, never shared with a forked child.
+    ``create`` is a module-level function (the key of the cache), which neither
+    raises nor calls this function.
+    """
+    active = _current()
+    if active is None or active.meter is None:
+        return None
+    if (found := active.instruments.get(create)) is not None:
+        return found
+    with active.instruments_lock:
+        if create not in active.instruments:
+            active.instruments[create] = create(active.meter)
+        return active.instruments[create]
 
 
 def logger_provider():

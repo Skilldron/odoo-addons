@@ -1,4 +1,5 @@
 import os
+import time
 from unittest.mock import patch
 
 import odoo
@@ -12,7 +13,7 @@ from ..config import Config
 from ..instrumentation import _patch
 from ..instrumentation import logs as logs_instrumentation
 from ..instrumentation import server as server_instrumentation
-from .common import ENDPOINT, in_memory_reader, keep_sdk_state
+from .common import ENDPOINT, OtelMixin, in_memory_reader, keep_sdk_state
 
 HOOKS_LOGGER = "odoo.addons.monitoring_opentelemetry.hooks"
 
@@ -167,3 +168,125 @@ class TestWorker(BaseCase):
         wrapper = Worker.start
         server_instrumentation.install(None, None)
         self.assertIs(Worker.start, wrapper)
+
+
+@tagged("post_install", "-at_install")
+class TestRecycles(OtelMixin, BaseCase):
+    """Worker.check_limits, the original ones replaced by mocks that stop the worker
+    (``alive = False``) before the instrumentation wraps them; Worker.start by a
+    mock."""
+
+    def setUp(self):
+        super().setUp()
+        self.originals = {}
+        for owner in (Worker, WorkerCron):
+            patcher = patch.object(owner, "check_limits", autospec=True)
+            self.originals[owner] = patcher.start()
+            self.originals[owner].side_effect = self.stop_worker
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(Worker, "start", autospec=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        server_instrumentation.install(lambda process_type: None, lambda: None)
+        self.addCleanup(server_instrumentation.uninstall)
+        self.setup_otel()
+
+    @staticmethod
+    def stop_worker(worker):
+        worker.alive = False
+
+    def worker(self, cls=WorkerHTTP, **values):
+        worker = object.__new__(cls)
+        defaults = {
+            "alive": True,
+            "ppid": os.getppid(),
+            "request_count": 0,
+            "request_max": 100,
+            "alive_time": time.monotonic(),
+        }
+        vars(worker).update(defaults, **values)
+        return worker
+
+    def recycles(self):
+        collected, _resource = self.collect_metrics()
+        if "odoo.worker.recycles" not in collected:
+            return {}
+        metric = collected["odoo.worker.recycles"]
+        self.assertEqual(metric.unit, "{recycle}")
+        return {
+            point.attributes["odoo.worker.recycle.reason"]: point.value
+            for point in metric.data.data_points
+        }
+
+    def test_request_limit(self):
+        worker = self.worker(request_count=100)
+        worker.check_limits()
+        self.assertFalse(worker.alive)
+        self.originals[Worker].assert_called_once_with(worker)
+        self.assertEqual(self.recycles(), {"request_limit": 1})
+
+    def test_memory_soft(self):
+        with patch.dict(odoo_config.options, {"limit_memory_soft": 1}):
+            self.worker().check_limits()
+        self.assertEqual(self.recycles(), {"memory_soft": 1})
+
+    def test_parent_changed(self):
+        self.worker(ppid=-1).check_limits()
+        self.assertEqual(self.recycles(), {"parent_changed": 1})
+
+    def test_cron_max_age(self):
+        worker = self.worker(WorkerCron, alive_time=time.monotonic() - 20)
+        with patch.dict(odoo_config.options, {"limit_time_worker_cron": 10}):
+            worker.check_limits()
+        self.assertEqual(self.recycles(), {"max_age": 1})
+
+    def test_cron_counted_once(self):
+        # WorkerCron.check_limits calls Worker.check_limits (super), both wrapped
+        def cron_check_limits(worker):
+            Worker.check_limits(worker)
+
+        self.originals[WorkerCron].side_effect = cron_check_limits
+        self.worker(WorkerCron, request_count=100).check_limits()
+        self.originals[Worker].assert_called_once()
+        self.assertEqual(self.recycles(), {"request_limit": 1})
+
+    def test_alive(self):
+        self.originals[Worker].side_effect = None
+        worker = self.worker(request_count=100)
+        worker.check_limits()
+        self.assertTrue(worker.alive)
+        self.assertEqual(self.recycles(), {})
+
+    def test_stopped_by_a_signal(self):
+        # not alive before the check (graceful stop), or for no reason of the check
+        self.worker(alive=False, request_count=100).check_limits()
+        with patch.dict(odoo_config.options, {"limit_memory_soft": 0}):
+            self.worker().check_limits()
+        self.assertEqual(self.recycles(), {})
+
+    def test_failure_is_contained(self):
+        with (
+            patch.object(
+                server_instrumentation,
+                "recycle_reason",
+                side_effect=RuntimeError("boom"),
+            ),
+            self.assertLogs(server_instrumentation._logger.name, "WARNING"),
+        ):
+            worker = self.worker(request_count=100)
+            worker.check_limits()
+        self.assertFalse(worker.alive)
+
+    def test_started_at_zero(self):
+        Worker.start(self.worker(WorkerCron))  # WorkerCron.start calls it
+        Worker.start(self.worker())
+        self.assertEqual(
+            self.recycles(),
+            {"parent_changed": 0, "request_limit": 0, "memory_soft": 0, "max_age": 0},
+        )
+
+    def test_uninstall(self):
+        server_instrumentation.uninstall()
+        self.assertIs(Worker.check_limits, self.originals[Worker])
+        self.assertIs(WorkerCron.check_limits, self.originals[WorkerCron])
+        server_instrumentation.install(lambda process_type: None, lambda: None)
