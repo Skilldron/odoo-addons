@@ -1,7 +1,7 @@
 {
     "name": "Monitoring OpenTelemetry",
     "summary": "Export Odoo traces, metrics and logs with OpenTelemetry (OTLP)",
-    "version": "20.0.2.0.0",
+    "version": "20.0.2.0.1",
     "category": "Extra Tools",
     "website": "https://github.com/Skilldron/odoo-addons",
     "author": "Skilldron",

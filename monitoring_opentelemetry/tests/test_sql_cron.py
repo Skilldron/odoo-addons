@@ -314,14 +314,18 @@ class TestCron(OtelMixin, TransactionCase):
         self.assertEqual(dict(attributes)["odoo.cron.status"], "failed")
 
     def test_lag(self):
-        nextcall = fields.Datetime.now() - timedelta(seconds=90)
+        nextcall = fields.Datetime.now() - timedelta(seconds=100)
         self.process_job("model.search([], limit=1)", nextcall=nextcall)
         ((attributes, point),) = self.cron_points("odoo.cron.lag").items()
         self.assertEqual(
             dict(attributes), {"odoo.cron.name": "Monitoring OpenTelemetry test cron"}
         )
-        self.assertGreaterEqual(point.sum, 90)
+        self.assertGreaterEqual(point.sum, 100)
         self.assertLess(point.sum, 600)
+        self.assertEqual(tuple(point.explicit_bounds), cron_instrumentation.LAG_BUCKETS)
+        # a lag of a few minutes is known to the half minute: in (90, 120]
+        self.assertEqual(point.count, 1)
+        self.assertEqual(point.bucket_counts[point.explicit_bounds.index(120)], 1)
 
     def test_no_lag_before_nextcall(self):
         # run by a trigger before its nextcall: no known due time

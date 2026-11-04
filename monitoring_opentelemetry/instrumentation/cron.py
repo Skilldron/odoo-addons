@@ -46,7 +46,23 @@ _current = contextvars.ContextVar("monitoring_opentelemetry_cron", default=None)
 # in method_direct_trigger: a job run manually, in its HTTP request
 _manual = contextvars.ContextVar("monitoring_opentelemetry_cron_manual", default=False)
 DURATION_BUCKETS = (0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0)
-LAG_BUCKETS = (1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0, 3600.0)
+# finer up to five minutes: the cron threads or workers poll about once a minute
+LAG_BUCKETS = (
+    1.0,
+    5.0,
+    10.0,
+    20.0,
+    30.0,
+    45.0,
+    60.0,
+    90.0,
+    120.0,
+    180.0,
+    300.0,
+    600.0,
+    1800.0,
+    3600.0,
+)
 
 
 def _duration(meter):
